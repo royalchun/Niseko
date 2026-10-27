@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Niseko Snow 3D</title>
+  <meta name="description" content="Live 3D weather & snow simulator for Niseko United — Annupuri, Niseko Village, Grand Hirafu and Hanazono — with a 30-day snowfall forecast and lift-queue estimates.">
+  <meta property="og:title" content="Niseko Snow 3D — live snow simulator">
+  <meta property="og:description" content="See today's snowfall on a 3D model of Niseko, check the 30-day snow forecast and estimated lift queues.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄️</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+</head>
+<body>
+  <div id="scene"></div>
+
+  <!-- Loading -->
+  <div id="loader">
+    <div class="loader-card">
+      <div class="flake">❄</div>
+      <h1>Niseko Snow 3D</h1>
+      <p id="loader-msg">Downloading terrain & satellite tiles…</p>
+      <div class="bar"><div id="loader-bar"></div></div>
+    </div>
+  </div>
+
+  <!-- Top bar -->
+  <header id="topbar" class="glass">
+    <div class="brand">❄️ <span>Niseko Snow 3D</span></div>
+    <nav id="resort-nav" aria-label="Fly to resort">
+      <button data-go="overview" class="active">🗺️ All</button>
+      <button data-go="annupuri" style="--c:#38bdf8">Annupuri</button>
+      <button data-go="village" style="--c:#a78bfa">Village</button>
+      <button data-go="hirafu" style="--c:#f97316">Grand Hirafu</button>
+      <button data-go="hanazono" style="--c:#f43f5e">Hanazono</button>
+      <button data-go="summit" style="--c:#e2e8f0">▲ Summit</button>
+    </nav>
+    <div class="top-actions">
+      <button id="btn-forecast" class="pill">📈 Snow forecast</button>
+      <button id="btn-queue" class="pill">🚡 Lift queues</button>
+      <button id="btn-layers" class="pill icon" title="Layers & settings">⚙️</button>
+      <button id="btn-share" class="pill icon" title="Copy a link to this exact view">🔗</button>
+      <button id="btn-help" class="pill icon" title="Help">?</button>
+    </div>
+  </header>
+
+  <!-- Current conditions -->
+  <aside id="conditions" class="glass">
+    <div class="cond-head">
+      <div>
+        <div class="cond-where" id="cond-where">All Niseko United</div>
+        <div class="cond-time" id="cond-time">—</div>
+      </div>
+      <div class="cond-icon" id="cond-icon">❔</div>
+    </div>
+    <div class="cond-desc" id="cond-desc">Loading live weather…</div>
+    <div class="cond-grid">
+      <div><span>Temp</span><b id="c-temp">—</b></div>
+      <div><span>Snowfall</span><b id="c-snow">—</b></div>
+      <div><span>Last 24 h</span><b id="c-24">—</b></div>
+      <div><span>Wind</span><b id="c-wind">—</b></div>
+      <div><span>Base depth</span><b id="c-base">—</b></div>
+      <div><span>Summit depth</span><b id="c-top">—</b></div>
+      <div><span>Visibility</span><b id="c-vis">—</b></div>
+      <div><span>Freezing lvl</span><b id="c-frz">—</b></div>
+    </div>
+    <div id="demo-banner" class="demo-banner" hidden>🎬 Demo storm — not live data</div>
+    <button id="btn-collapse-cond" class="collapse" title="Collapse">–</button>
+  </aside>
+
+  <!-- Map controls (Google-Earth style) -->
+  <div id="navpad" class="glass">
+    <button id="compass" title="Reset north (N)"><span id="needle">➤</span><small>N</small></button>
+    <button data-nav="zoomin" title="Zoom in (+)">＋</button>
+    <button data-nav="zoomout" title="Zoom out (−)">－</button>
+    <div class="nav-row">
+      <button data-nav="rotl" title="Rotate left (Q)">⟲</button>
+      <button data-nav="rotr" title="Rotate right (E)">⟳</button>
+    </div>
+    <div class="nav-row">
+      <button data-nav="tiltup" title="Tilt up / 3D (R)">⤒</button>
+      <button data-nav="tiltdown" title="Top-down view (F)">⤓</button>
+    </div>
+    <button data-nav="home" title="Overview (0)">⌂</button>
+  </div>
+
+  <canvas id="minimap" width="320" height="240" title="Click to jump there"></canvas>
+
+  <!-- Timeline -->
+  <footer id="timeline" class="glass">
+    <button id="btn-play" class="round" title="Play / pause (Space)">▶</button>
+    <div class="tl-main">
+      <div class="tl-labels"><span id="tl-start">−14 d</span><span id="tl-label">Now</span><span id="tl-end">+16 d</span></div>
+      <div class="tl-track">
+        <canvas id="tl-spark" height="28"></canvas>
+        <input id="tl" type="range" min="0" max="1" value="0" step="1" aria-label="Time">
+      </div>
+    </div>
+    <button id="btn-now" class="pill">Now</button>
+    <select id="tl-speed" title="Playback speed"><option value="1">1 h/s</option><option value="3" selected>3 h/s</option><option value="12">12 h/s</option></select>
+  </footer>
+
+  <!-- Layers / settings -->
+  <section id="panel-layers" class="panel glass" hidden>
+    <header><h2>Layers & settings</h2><button class="close" data-close>✕</button></header>
+    <label class="row"><input type="checkbox" id="l-weather" checked> Weather effects (snow, rain, clouds, fog)</label>
+    <label class="row"><input type="checkbox" id="l-pistes" checked> Ski runs <small class="legend"><i style="background:#22c55e"></i>easy <i style="background:#ef4444"></i>intermediate <i style="background:#111827"></i>advanced</small></label>
+    <label class="row"><input type="checkbox" id="l-lifts" checked> Lifts & gondolas</label>
+    <label class="row"><input type="checkbox" id="l-liftlabels"> Lift names</label>
+    <label class="row"><input type="checkbox" id="l-labels" checked> Resort & peak labels</label>
+    <label class="row"><input type="checkbox" id="l-stylized"> Painted map (hide satellite photo)</label>
+    <label class="row col">Vertical exaggeration <span id="exag-val">1.3×</span><input type="range" id="l-exag" min="1" max="2.5" step="0.1" value="1.3"></label>
+    <label class="row col">Display quality
+      <select id="l-quality"></select>
+      <small>Ultra loads ~600 satellite tiles for crisp 4K/retina screens. Changing reloads the page.</small>
+    </label>
+    <hr>
+    <label class="row"><input type="checkbox" id="l-demo"> 🎬 Demo: simulate a big powder storm</label>
+    <small class="muted">Handy outside the season to see what a 40 cm dump looks like.</small>
+    <hr>
+    <button id="btn-shot" class="pill">📸 Save high-res screenshot</button>
+  </section>
+
+  <!-- Forecast -->
+  <section id="panel-forecast" class="panel glass wide" hidden>
+    <header><h2>❄️ Niseko snow forecast <small>mid-mountain, 1100 m</small></h2><button class="close" data-close>✕</button></header>
+    <div id="fc-cards" class="cards"></div>
+    <div class="chart-wrap"><canvas id="fc-chart"></canvas></div>
+    <div class="fc-table-wrap"><table id="fc-table"></table></div>
+    <details class="method">
+      <summary>How is this forecast made?</summary>
+      <ul>
+        <li><b>Days 1–5:</b> weighted blend of four independent weather models — JMA (Japan Meteorological Agency, 30%), ECMWF (30%), DWD ICON (20%) and NOAA GFS (20%). The bar range shows where models disagree.</li>
+        <li><b>Days 6–15:</b> the 51-member ECMWF ensemble is mixed in. Its 10–90% range is shown as the pale band, and the tooltip gives the probability of ≥10 cm / ≥25 cm days.</li>
+        <li><b>Days 11–30:</b> the forecast gradually relaxes toward the 10-season average for the same calendar dates (ERA5 reanalysis), because weather models have little skill beyond ~2 weeks.</li>
+        <li><b>Snow quality</b> uses temperature: colder snow is lighter and drier (higher snow-to-liquid ratio).</li>
+        <li>⚠️ Global models smooth out Niseko's sea-effect snow bands, so real totals at the summit are often <i>higher</i> than shown — treat this as a guide.</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- Queues -->
+  <section id="panel-queue" class="panel glass wide" hidden>
+    <header><h2>🚡 Lift queue estimate</h2><button class="close" data-close>✕</button></header>
+    <div class="warn">⚠️ <b>Estimate, not live.</b> No free public feed of Niseko lift queues exists. This model uses season peaks, weekday, time of day, powder-day rush and wind holds. Always check the <a href="https://www.niseko.ne.jp/en/" target="_blank" rel="noopener">official Niseko United site</a> for real-time lift status &amp; webcams.</div>
+    <div class="q-controls">
+      <label>Date & time (JST) <input type="datetime-local" id="q-when"></label>
+      <button id="q-sync" class="pill">Use timeline time</button>
+      <label class="row"><input type="checkbox" id="q-map" checked> Colour lifts on 3D map</label>
+    </div>
+    <div id="q-reasons" class="q-reasons"></div>
+    <div id="q-list" class="q-list"></div>
+  </section>
+
+  <!-- Help -->
+  <section id="panel-help" class="panel glass" hidden>
+    <header><h2>How to use</h2><button class="close" data-close>✕</button></header>
+    <ul class="help">
+      <li><b>Move:</b> drag with one finger / left mouse.</li>
+      <li><b>Rotate & tilt:</b> right-drag, two-finger twist, or ⟲ ⟳ ⤒ ⤓ buttons.</li>
+      <li><b>Zoom:</b> scroll / pinch, or ＋ －. Zoom goes toward your cursor.</li>
+      <li><b>Fly to a spot:</b> double-click / double-tap the terrain.</li>
+      <li><b>Jump to a resort:</b> top buttons, resort labels, minimap, or keys <kbd>1</kbd>–<kbd>4</kbd> (<kbd>0</kbd> = overview).</li>
+      <li><b>Time travel:</b> drag the timeline to see past 14 days and the next 16 days of weather — snow depth on the ground updates too. <kbd>Space</kbd> plays.</li>
+      <li><b>Keyboard:</b> <kbd>W A S D</kbd>/arrows pan, <kbd>Q</kbd>/<kbd>E</kbd> rotate, <kbd>R</kbd>/<kbd>F</kbd> tilt, <kbd>+</kbd>/<kbd>−</kbd> zoom, <kbd>N</kbd> north.</li>
+      <li><b>Share:</b> 🔗 copies a link to the exact view & time.</li>
+    </ul>
+    <h3>Data sources (all free)</h3>
+    <ul class="help small">
+      <li>Weather & forecast: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0) — JMA, ECMWF, DWD ICON, NOAA GFS, ERA5.</li>
+      <li>Elevation: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">AWS Terrain Tiles</a> (Mapzen, SRTM, GSI Japan).</li>
+      <li>Satellite: Esri World Imagery — © Esri, Maxar, Earthstar Geographics.</li>
+      <li>Lifts & runs: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</li>
+    </ul>
+  </section>
+
+  <div id="tooltip" class="glass" hidden></div>
+  <div id="toast" hidden></div>
+  <div id="attrib">© Open-Meteo · Esri, Maxar · AWS Terrain Tiles · © OpenStreetMap</div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
