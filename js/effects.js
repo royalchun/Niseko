@@ -35,6 +35,31 @@ function softTexture(size, inner = 0.0, outer = 0.5) {
   return t;
 }
 
+// Six-armed dendrite snowflake drawn on a canvas (alpha only).
+function dendriteTexture(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const r = size / 2;
+  g.translate(r, r);
+  g.strokeStyle = '#fff'; g.lineCap = 'round';
+  g.shadowColor = '#fff'; g.shadowBlur = size * 0.04;
+  for (let a = 0; a < 6; a++) {
+    g.save(); g.rotate((a * Math.PI) / 3);
+    g.lineWidth = size * 0.045;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -r * 0.88); g.stroke();
+    g.lineWidth = size * 0.03;
+    for (const [t, l] of [[0.35, 0.22], [0.6, 0.17], [0.8, 0.1]]) {
+      g.beginPath(); g.moveTo(0, -r * t); g.lineTo(-r * l, -r * (t + l * 0.9)); g.moveTo(0, -r * t); g.lineTo(r * l, -r * (t + l * 0.9)); g.stroke();
+    }
+    g.restore();
+  }
+  g.beginPath(); g.arc(0, 0, size * 0.07, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 export function buildEffects({ scene, renderer, terrain, quality }) {
   const { frame } = terrain;
   const span = Math.max(frame.width, frame.depth);
@@ -52,7 +77,8 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
   const sun = new THREE.DirectionalLight(0xffffff, 2.2);
   sun.castShadow = quality.shadows;
   if (quality.shadows) {
-    sun.shadow.mapSize.set(4096, 4096);
+    const sm = Math.min(quality.shadowMap ?? 4096, renderer.capabilities.maxTextureSize);
+    sun.shadow.mapSize.set(sm, sm);
     const s = span * 0.6;
     Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 10, far: span * 4 });
     sun.shadow.bias = -0.0004;
@@ -102,50 +128,84 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
   clouds.renderOrder = 2;
   scene.add(clouds);
 
-  // --- Precipitation: GPU-animated points in a box that follows the camera ---
-  const MAXP = quality.maxFlakes;
-  const pGeo = new THREE.BufferGeometry();
-  const ppos = new Float32Array(MAXP * 3), prnd = new Float32Array(MAXP);
-  for (let i = 0; i < MAXP; i++) { ppos[i * 3] = Math.random(); ppos[i * 3 + 1] = Math.random(); ppos[i * 3 + 2] = Math.random(); prnd[i] = Math.random(); }
-  pGeo.setAttribute('position', new THREE.BufferAttribute(ppos, 3));
-  pGeo.setAttribute('rnd', new THREE.BufferAttribute(prnd, 1));
-  pGeo.setDrawRange(0, 0);
-  const precipMat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false,
-    uniforms: { uTime: { value: 0 }, uBox: { value: 600 }, uCenter: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3(0, -1.2, 0) },
-      uScale: { value: renderer.getPixelRatio() * innerHeight }, uRain: { value: 0 }, uSize: { value: 1 }, uOpacity: { value: 0.9 } },
-    vertexShader: `
-      attribute float rnd; uniform float uTime, uBox, uScale, uRain, uSize; uniform vec3 uCenter, uVel; varying float vR; varying float vFade;
-      void main(){
-        vec3 vel = uVel * (0.7 + 0.6 * rnd);
-        vec3 p = position * uBox + vel * uTime;
-        // flutter
-        p.x += sin(uTime * (0.8 + rnd) + rnd * 40.0) * uBox * 0.004 * (1.0 - uRain);
-        p.z += cos(uTime * (0.6 + rnd) + rnd * 20.0) * uBox * 0.004 * (1.0 - uRain);
-        p = mod(p - uCenter + uBox * 0.5, uBox) + uCenter - uBox * 0.5;
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_Position = projectionMatrix * mv;
-        float s = uSize * (0.6 + 0.8 * rnd) * mix(1.0, 1.6, uRain);
-        gl_PointSize = clamp(s * uScale / -mv.z, 1.0, 64.0);
-        vR = rnd; vFade = 1.0 - smoothstep(uBox * 0.35, uBox * 0.5, length(p - uCenter));
-      }`,
-    fragmentShader: `
-      uniform float uRain, uOpacity; varying float vR; varying float vFade;
-      void main(){
-        vec2 c = gl_PointCoord - 0.5;
-        float flake = 1.0 - smoothstep(0.15, 0.5, length(c));
-        float streak = (1.0 - smoothstep(0.02, 0.08, abs(c.x))) * (1.0 - smoothstep(0.3, 0.5, abs(c.y)));
-        float a = mix(flake, streak * 0.55, uRain) * uOpacity * vFade;
-        if (a < 0.02) discard;
-        gl_FragColor = vec4(mix(vec3(1.0), vec3(0.75, 0.82, 0.92), uRain), a);
-      }`,
-  });
-  const precip = new THREE.Points(pGeo, precipMat);
-  precip.frustumCulled = false;
-  precip.renderOrder = 3;
-  scene.add(precip);
+  // --- Precipitation ---
+  // Three GPU-animated layers: "far" snow in a box that scales with zoom, "near"
+  // big detailed flakes right around the camera, and ground-hugging spindrift.
+  // Flakes read the terrain height texture so they stop where they hit the ground.
+  const flakeTex = dendriteTexture(128);
+  const terrainU = {
+    uHeight: { value: terrain.heightTex }, uTerrain: { value: new THREE.Vector2(frame.width, frame.depth) }, uExag: { value: 1 },
+  };
+  const PRECIP_VS = `
+    attribute float rnd; uniform float uTime, uBox, uScale, uRain, uSize, uFlutter, uGroundHug, uNearCut;
+    uniform vec3 uCenter, uVel; uniform sampler2D uHeight; uniform vec2 uTerrain; uniform float uExag;
+    varying float vR; varying float vFade; varying float vAngle; varying float vPx;
+    float groundAt(vec2 xz){ vec2 uv = xz / uTerrain + 0.5; return texture2D(uHeight, uv).r * uExag; } // data row 0 = north = uv.y 0
+    void main(){
+      vec3 vel = uVel * (0.7 + 0.6 * rnd);
+      vec3 p = position * uBox + vel * uTime;
+      p.x += sin(uTime * (0.8 + rnd) + rnd * 40.0) * uBox * uFlutter * (1.0 - uRain);
+      p.z += cos(uTime * (0.6 + rnd) + rnd * 20.0) * uBox * uFlutter * (1.0 - uRain);
+      p = mod(p - uCenter + uBox * 0.5, uBox) + uCenter - uBox * 0.5;
+      float g = groundAt(p.xz);
+      if (uGroundHug > 0.5) p.y = g + 0.5 + rnd * rnd * 22.0 * uExag + sin(uTime * 3.0 + rnd * 50.0) * 2.0;
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      float s = uSize * (0.55 + 0.9 * rnd) * mix(1.0, 1.6, uRain);
+      vPx = s * uScale / -mv.z;
+      gl_PointSize = clamp(vPx, 1.0, 96.0);
+      vR = rnd; vAngle = rnd * 6.2831 + uTime * (rnd - 0.5) * 1.5;
+      vFade = (1.0 - smoothstep(uBox * 0.35, uBox * 0.5, length(p - uCenter))) * step(g, p.y)
+        * smoothstep(uNearCut * 0.5, uNearCut, distance(p, cameraPosition)); // hand over to the near layer
+    }`;
+  const PRECIP_FS = `
+    uniform float uRain, uOpacity, uLight; uniform sampler2D uFlake; uniform vec3 uTint;
+    varying float vR; varying float vFade; varying float vAngle; varying float vPx;
+    void main(){
+      vec2 c = gl_PointCoord - 0.5;
+      float ca = cos(vAngle), sa = sin(vAngle);
+      vec2 rc = vec2(ca * c.x - sa * c.y, sa * c.x + ca * c.y);
+      float dot_ = 1.0 - smoothstep(0.12, 0.5, length(c));
+      float dendrite = texture2D(uFlake, rc + 0.5).a;
+      float flake = mix(dot_, dendrite, smoothstep(10.0, 26.0, vPx));   // detail only when big on screen
+      float streak = (1.0 - smoothstep(0.02, 0.08, abs(c.x))) * (1.0 - smoothstep(0.3, 0.5, abs(c.y)));
+      float a = mix(flake, streak * 0.55, uRain) * uOpacity * vFade;
+      if (a < 0.02) discard;
+      vec3 col = mix(vec3(1.0), vec3(0.75, 0.82, 0.92), uRain) * uTint * uLight;
+      gl_FragColor = vec4(col, a);
+    }`;
+  function precipLayer(count, renderOrder) {
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(count * 3), rnd = new Float32Array(count);
+    for (let i = 0; i < count; i++) { pos[i * 3] = Math.random(); pos[i * 3 + 1] = Math.random(); pos[i * 3 + 2] = Math.random(); rnd[i] = Math.random(); }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('rnd', new THREE.BufferAttribute(rnd, 1));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false,
+      uniforms: {
+        uTime: { value: 0 }, uBox: { value: 600 }, uCenter: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3(0, -1.2, 0) },
+        uScale: { value: renderer.getPixelRatio() * innerHeight }, uRain: { value: 0 }, uSize: { value: 1 }, uOpacity: { value: 0.9 },
+        uFlutter: { value: 0.004 }, uGroundHug: { value: 0 }, uNearCut: { value: 0 }, uLight: { value: 1 }, uTint: { value: new THREE.Color(1, 1, 1) },
+        uFlake: { value: flakeTex }, ...terrainU,
+      },
+      vertexShader: PRECIP_VS, fragmentShader: PRECIP_FS,
+    });
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false;
+    pts.renderOrder = renderOrder;
+    scene.add(pts);
+    return { pts, geo, mat, count, u: mat.uniforms };
+  }
+  const far = precipLayer(quality.maxFlakes, 3);
+  const near = precipLayer(quality.nearFlakes, 4);
+  const drift = precipLayer(Math.round(quality.maxFlakes / 4), 3);
+  near.u.uFlutter.value = 0.02;
+  drift.u.uGroundHug.value = 1;
+  drift.u.uFlutter.value = 0.01;
+  const layers = [far, near, drift];
 
-  let state = null, rate = 0, time = 0;
+  let state = null, rate = 0, time = 0, driftLevel = 0, windStrength = 0, sunLight = 0;
   const windVec = new THREE.Vector2();
 
   function apply(s, date, exag) {
@@ -188,23 +248,47 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
     const isRain = rainRate > snowRate * 0.7 && rainRate > 0.05;
     rate = isRain ? Math.min(1, rainRate / 4) : Math.min(1, snowRate / 2.5); // cm/h → 0..1
     const any = snowRate > 0.02 || rainRate > 0.05;
-    pGeo.setDrawRange(0, any ? Math.round(MAXP * (0.12 + 0.88 * rate)) : 0);
-    precipMat.uniforms.uRain.value = isRain ? 1 : 0;
     const fall = isRain ? 7 : 1.1;
-    precipMat.uniforms.uVel.value.set(windVec.x * (isRain ? 0.5 : 0.9), -fall, windVec.y * (isRain ? 0.5 : 0.9));
+    const light = 0.35 + 0.65 * day;
+    for (const L of [far, near]) {
+      L.geo.setDrawRange(0, any ? Math.round(L.count * (0.12 + 0.88 * rate)) : 0);
+      L.u.uRain.value = isRain ? 1 : 0;
+      L.u.uVel.value.set(windVec.x * (isRain ? 0.5 : 0.9), -fall, windVec.y * (isRain ? 0.5 : 0.9));
+      L.u.uLight.value = light;
+    }
+    // Spindrift: strong gusts lift existing snow off the ground.
+    const gust = s.top?.gust ?? s.gust ?? 0;
+    const driftAmt = isRain ? 0 : THREE.MathUtils.clamp((gust - 35) / 40, 0, 1) * THREE.MathUtils.clamp((s.topDepth ?? 0) / 0.1, 0, 1);
+    drift.geo.setDrawRange(0, Math.round(drift.count * driftAmt));
+    drift.u.uVel.value.set(windVec.x * 1.8, 0, windVec.y * 1.8);
+    drift.u.uOpacity.value = 0.35 + 0.4 * driftAmt;
+    drift.u.uLight.value = light;
+    driftLevel = driftAmt;
+    windStrength = THREE.MathUtils.clamp(((s.wind ?? 0) - 10) / 40, 0, 1);
+    sunLight = day * (1 - cloud);
   }
 
   function update(dt, camera, controls) {
     time += dt;
     cloudMat.uniforms.uTime.value = time;
-    // Precip box scales with zoom so it always looks like a snowstorm in view.
+    // Far box scales with zoom so it always reads as a snowstorm in view.
     const dist = camera.position.distanceTo(controls.target);
     const box = THREE.MathUtils.clamp(dist * 0.9, 250, 7000);
-    const u = precipMat.uniforms;
-    u.uBox.value = box;
-    u.uSize.value = box / 220;
-    u.uTime.value = time * (box / 600); // keep apparent fall speed constant
-    u.uCenter.value.copy(camera.position).lerp(controls.target, 0.45);
+    far.u.uBox.value = box;
+    far.u.uSize.value = box / 240;
+    far.u.uTime.value = time * (box / 600); // keep apparent fall speed constant
+    far.u.uCenter.value.copy(camera.position).lerp(controls.target, 0.45);
+    far.u.uNearCut.value = Math.min(35, box * 0.1);
+    // Near flakes: real-world scale around the camera (≈ 0.1 m flakes, 1 m/s).
+    near.u.uBox.value = 70;
+    near.u.uSize.value = 0.12;
+    near.u.uTime.value = time;
+    near.u.uCenter.value.copy(camera.position);
+    const dbox = THREE.MathUtils.clamp(dist * 1.1, 300, 4000);
+    drift.u.uBox.value = dbox;
+    drift.u.uSize.value = dbox / 260;
+    drift.u.uTime.value = time * (dbox / 600);
+    drift.u.uCenter.value.copy(controls.target);
     scene.fog.color.lerp(fogTarget, Math.min(1, dt * 2));
     if (!scene.background) scene.background = new THREE.Color();
     scene.background.lerp(bgTarget, Math.min(1, dt * 2));
@@ -213,9 +297,15 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
 
   function resize() {
     const s = renderer.getPixelRatio() * innerHeight;
-    precipMat.uniforms.uScale.value = s;
+    for (const L of layers) L.u.uScale.value = s;
     cloudMat.uniforms.uScale.value = s;
   }
 
-  return { apply, update, resize, setVisible(on) { precip.visible = clouds.visible = on; }, get rate() { return rate; } };
+  return {
+    apply, update, resize,
+    setVisible(on) { clouds.visible = on; for (const L of layers) L.pts.visible = on; },
+    setExaggeration(e) { terrainU.uExag.value = e; },
+    get rate() { return rate; }, get drift() { return driftLevel; }, get windStrength() { return windStrength; }, get sunLight() { return sunLight; },
+    windTo: windVec,
+  };
 }

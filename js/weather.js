@@ -5,9 +5,9 @@ import { API, WEATHER_POINTS, SUMMIT, RESORTS } from './config.js';
 const HOURLY = ['temperature_2m', 'precipitation', 'rain', 'snowfall', 'snow_depth', 'weather_code', 'cloud_cover', 'cloud_cover_low',
   'visibility', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'freezing_level_height', 'is_day'];
 
-const jst = t => Date.parse(t + ':00+09:00');
+export const jst = t => Date.parse(t + ':00+09:00');
 
-async function cached(key, ttlMin, fn) {
+export async function cached(key, ttlMin, fn) {
   try {
     const c = JSON.parse(localStorage.getItem(key) || 'null');
     if (c && Date.now() - c.at < ttlMin * 60e3) return c.data;
@@ -17,14 +17,14 @@ async function cached(key, ttlMin, fn) {
   return data;
 }
 
-async function getJSON(url) {
+export async function getJSON(url) {
   const r = await fetch(url);
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.reason || `HTTP ${r.status}`);
   return j;
 }
 
-const qs = o => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+export const qs = o => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 
 // Hourly series for summit + 4 resort bases, 14 days back and 16 days ahead.
 export function fetchHourly() {

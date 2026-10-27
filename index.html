@@ -47,8 +47,9 @@
       <button data-go="summit" style="--c:#e2e8f0">▲ Summit</button>
     </nav>
     <div class="top-actions">
-      <button id="btn-forecast" class="pill">📈 Snow forecast</button>
-      <button id="btn-queue" class="pill">🚡 Lift queues</button>
+      <button id="btn-cps" class="pill">📍 <span>Checkpoints</span></button>
+      <button id="btn-forecast" class="pill">📈 <span>Snow forecast</span></button>
+      <button id="btn-queue" class="pill">🚡 <span>Lift queues</span></button>
       <button id="btn-layers" class="pill icon" title="Layers & settings">⚙️</button>
       <button id="btn-share" class="pill icon" title="Copy a link to this exact view">🔗</button>
       <button id="btn-help" class="pill icon" title="Help">?</button>
@@ -119,11 +120,12 @@
     <label class="row"><input type="checkbox" id="l-lifts" checked> Lifts & gondolas</label>
     <label class="row"><input type="checkbox" id="l-liftlabels"> Lift names</label>
     <label class="row"><input type="checkbox" id="l-labels" checked> Resort & peak labels</label>
+    <label class="row"><input type="checkbox" id="l-cps" checked> Checkpoints 📍</label>
     <label class="row"><input type="checkbox" id="l-stylized"> Painted map (hide satellite photo)</label>
     <label class="row col">Vertical exaggeration <span id="exag-val">1.3×</span><input type="range" id="l-exag" min="1" max="2.5" step="0.1" value="1.3"></label>
     <label class="row col">Display quality
       <select id="l-quality"></select>
-      <small>Ultra loads ~600 satellite tiles for crisp 4K/retina screens. Changing reloads the page.</small>
+      <small>High &amp; Ultra use Japan's 5 m elevation model and load an extra-sharp photo patch wherever you zoom in. Changing reloads the page.</small>
     </label>
     <hr>
     <label class="row"><input type="checkbox" id="l-demo"> 🎬 Demo: simulate a big powder storm</label>
@@ -163,6 +165,21 @@
     <div id="q-list" class="q-list"></div>
   </section>
 
+  <!-- Checkpoint list -->
+  <section id="panel-cplist" class="panel glass" hidden>
+    <header><h2>📍 Checkpoints</h2><button class="close" data-close>✕</button></header>
+    <input id="cp-search" type="search" placeholder="Search (e.g. Hanazono, hut, gondola)…" autocomplete="off">
+    <button id="cp-add" class="pill wide-btn">📌 Add my own checkpoint</button>
+    <div id="cp-list"></div>
+    <p class="muted small">Your own checkpoints are saved in this browser. Share one with 🔗 inside its card.</p>
+  </section>
+
+  <!-- Checkpoint detail -->
+  <section id="panel-cp" class="panel glass" hidden>
+    <header><h2>Checkpoint</h2><button class="close" data-close>✕</button></header>
+    <div id="cp-body"></div>
+  </section>
+
   <!-- Help -->
   <section id="panel-help" class="panel glass" hidden>
     <header><h2>How to use</h2><button class="close" data-close>✕</button></header>
@@ -174,20 +191,20 @@
       <li><b>Jump to a resort:</b> top buttons, resort labels, minimap, or keys <kbd>1</kbd>–<kbd>4</kbd> (<kbd>0</kbd> = overview).</li>
       <li><b>Time travel:</b> drag the timeline to see past 14 days and the next 16 days of weather — snow depth on the ground updates too. <kbd>Space</kbd> plays.</li>
       <li><b>Keyboard:</b> <kbd>W A S D</kbd>/arrows pan, <kbd>Q</kbd>/<kbd>E</kbd> rotate, <kbd>R</kbd>/<kbd>F</kbd> tilt, <kbd>+</kbd>/<kbd>−</kbd> zoom, <kbd>N</kbd> north.</li>
+      <li><b>Checkpoints:</b> tap a 📍 pin (or 📍 Checkpoints, key <kbd>C</kbd>) for live weather at that exact spot, sun/shade, slope, nearby lifts & runs. 👁️ <i>Stand here</i> drops you to eye level.</li>
       <li><b>Share:</b> 🔗 copies a link to the exact view & time.</li>
     </ul>
     <h3>Data sources (all free)</h3>
     <ul class="help small">
       <li>Weather & forecast: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0) — JMA, ECMWF, DWD ICON, NOAA GFS, ERA5.</li>
-      <li>Elevation: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">AWS Terrain Tiles</a> (Mapzen, SRTM, GSI Japan).</li>
-      <li>Satellite: Esri World Imagery — © Esri, Maxar, Earthstar Geographics.</li>
+      <li>Elevation & aerial photos: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">GSI Tiles</a> (地理院タイル, Geospatial Information Authority of Japan) — 5 m / 10 m DEM and seamless orthophotos. Fallbacks: AWS Terrain Tiles, Esri World Imagery.</li>
       <li>Lifts & runs: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</li>
     </ul>
   </section>
 
   <div id="tooltip" class="glass" hidden></div>
   <div id="toast" hidden></div>
-  <div id="attrib">© Open-Meteo · Esri, Maxar · AWS Terrain Tiles · © OpenStreetMap</div>
+  <div id="attrib">© Open-Meteo · 地理院タイル (GSI) · Esri · © OpenStreetMap</div>
 
   <script type="module" src="js/main.js"></script>
 </body>

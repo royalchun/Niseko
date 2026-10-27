@@ -22,20 +22,20 @@ export function buildOverlays({ osm, terrain, onResortClick }) {
     return m;
   };
 
-  // Drape a lat/lon polyline on the terrain, densifying every ~15 m.
+  // Drape a lat/lon polyline on the terrain, densifying every ~6 m (5 m DEM).
   function drape(pts, lift) {
     const out = [];
     const local = pts.map(([lat, lon]) => frame.toLocal(lat, lon));
     for (let i = 0; i < local.length - 1; i++) {
       const a = local[i], b = local[i + 1];
-      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 15));
+      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 6));
       for (let k = 0; k < n; k++) {
         const x = a.x + (b.x - a.x) * k / n, z = a.z + (b.z - a.z) * k / n;
-        out.push(x, elevationAt(x, z) + (lift ? 0 : 3), z);
+        out.push(x, elevationAt(x, z) + (lift ? 0 : 5), z);
       }
     }
     const l = local[local.length - 1];
-    out.push(l.x, elevationAt(l.x, l.z) + (lift ? 0 : 3), l.z);
+    out.push(l.x, elevationAt(l.x, l.z) + (lift ? 0 : 5), l.z);
     return out;
   }
 

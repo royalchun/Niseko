@@ -3,7 +3,10 @@
 A live 3D weather & snow simulator for **Niseko United** — Annupuri, Niseko Village, Grand Hirafu and Hanazono — built to share with friends planning a ski trip.
 
 - **Live weather in 3D** — falling snow / rain, wind drift, clouds, fog and real sun position, driven by the current forecast for each resort base and the summit.
-- **Snow on the ground** — snow depth from the weather model, spread over the terrain by elevation, with cliffs shedding snow and fresh snow looking brighter.
+- **Detailed terrain** — Japan's official GSI **5 m elevation model** (vs 30 m SRTM) with a 5 m lighting map, GSI aerial photos, and an extra-sharp photo patch (≈0.6 m/pixel) that loads wherever you zoom in.
+- **Snow on the ground** — snow depth from the weather model, spread over the terrain by elevation; cliffs shed snow, lee slopes collect wind-blown snow, the surface has wind ripples (sastrugi), and fresh snow sparkles in the sun.
+- **Snowfall** — three layers: distant snow, detailed six-armed flakes around the camera, and spindrift blowing along the ground in strong wind. Flakes stop where they hit the terrain.
+- **Checkpoints** — 20 on-mountain spots (e.g. Hanazono 308, Boyoso, 1000m Hut, the summit) plus your own: live weather at that exact elevation, feels-like temperature, 48 h chart, sun/shade times from the real terrain horizon, slope & aspect, nearest lifts (with queue estimate) and runs, and an eye-level "Stand here" view.
 - **Time travel** — drag the timeline through the past 14 days and next 16 days; the storm and the snowpack update as you scrub.
 - **30-day snow forecast** — multi-model blend (JMA, ECMWF, ICON, GFS) → ECMWF 51-member ensemble → 10-season climatology, weighted by lead time, with uncertainty bands, powder probabilities and snow quality.
 - **Lift-queue estimate** — a transparent heuristic model (holiday peaks, weekday, hour, powder-day rush, wind holds). *Not live data* — see below.
@@ -34,9 +37,9 @@ python3 -m http.server 8000
 | Multi-model forecast | Open-Meteo (`jma_seamless`, `ecmwf_ifs025`, `icon_seamless`, `gfs_seamless`) | JMA is the most detailed model over Hokkaido. |
 | Ensemble | [Open-Meteo Ensemble API](https://open-meteo.com/en/docs/ensemble-api) | ECMWF IFS 51 members. |
 | Climatology | [Open-Meteo Historical API](https://open-meteo.com/en/docs/historical-weather-api) | ERA5 reanalysis, last 10 seasons. |
-| Elevation | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) | Terrarium PNG encoding. |
-| Satellite imagery | Esri World Imagery | © Esri, Maxar, Earthstar Geographics — non-commercial use with attribution. |
-| Lifts, runs, peaks | © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL) | Baked into `data/niseko-osm.json`. |
+| Elevation | [GSI Tiles 地理院タイル](https://maps.gsi.go.jp/development/ichiran.html) `dem5c_png` (5 m), `dem_png` (10 m) | Geospatial Information Authority of Japan, free with attribution. Fallback: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/). |
+| Aerial photos | GSI `seamlessphoto` | Sharpest free imagery for Japan. Fallback: Esri World Imagery (© Esri, Maxar). |
+| Lifts, runs, peaks, restaurants | © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL) | Baked into `data/niseko-osm.json`. |
 
 Responses are cached in the browser (30 min – 7 days) to stay well inside the free limits.
 
@@ -54,6 +57,7 @@ css/style.css        styles (dark glass UI, mobile layout)
 js/config.js         area, resorts, quality presets, data URLs
 js/terrain.js        tile stitching, 3D mesh, snow-cover shader
 js/overlays.js       lifts, runs, labels
+js/checkpoints.js    checkpoint pins, detail cards, eye-level view
 js/effects.js        sky, sun, fog, clouds, snow/rain particles
 js/weather.js        Open-Meteo fetching + caching
 js/forecast.js       snow prediction model + chart

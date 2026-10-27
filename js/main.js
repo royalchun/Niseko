@@ -8,6 +8,7 @@ import { buildEffects } from './effects.js';
 import { fetchHourly, fetchMultiModel, fetchEnsemble, fetchClimatology, sceneState, stateAt, wmo } from './weather.js';
 import { analyse, renderChart } from './forecast.js';
 import { estimateQueues, seasonInfo } from './crowd.js';
+import { initCheckpoints } from './checkpoints.js';
 
 const $ = s => document.querySelector(s);
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
@@ -37,10 +38,10 @@ const controls = new MapControls(camera, renderer.domElement);
 Object.assign(controls, { enableDamping: true, dampingFactor: 0.08, screenSpacePanning: false, maxPolarAngle: Math.PI * 0.47, minDistance: 150, zoomToCursor: true, zoomSpeed: 1.2 });
 
 // ---------- App state ----------
-const app = {
+const app = window.__niseko = { // exposed for debugging in the browser console
   terrain: null, overlays: null, effects: null, weather: null, analysis: null,
   time: Date.now(), focus: null, demo: false, playing: false, exag: Number(store.get('nk-exag', 1.3)),
-  times: [], queueOn: false,
+  times: [], queueOn: false, standing: false, cps: null, hdLoading: false,
 };
 
 function toast(msg, ms = 2200) {
@@ -82,6 +83,7 @@ function viewFor(id) {
 }
 
 function goTo(id, ms) {
+  leaveStanding();
   const v = viewFor(id);
   flyTo(v.target, v.pos, ms);
   app.focus = id === 'overview' || id === 'summit' ? (id === 'summit' ? 'summit' : null) : id;
@@ -107,6 +109,26 @@ function pan(dx, dz) {
   const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
   const move = right.multiplyScalar(dx * dist * 0.15).add(fwd.multiplyScalar(dz * dist * 0.15));
   flyTo(controls.target.clone().add(move), camera.position.clone().add(move), 300);
+}
+
+// Eye-level "stand here" view, looking downhill.
+function standAt(p, h0, aspect) {
+  app.standing = true;
+  controls.minDistance = 8;
+  controls.maxPolarAngle = Math.PI * 0.62;
+  const a = (aspect * Math.PI) / 180;
+  const dir = new THREE.Vector3(Math.sin(a), 0, -Math.cos(a));
+  const eye = new THREE.Vector3(p.x, (h0 + 1.8) * app.exag, p.z);
+  const look = eye.clone().addScaledVector(dir, 60);
+  look.y = elevAt(look.x, look.z) + 1.8 * app.exag;
+  flyTo(look, eye, 1800);
+  toast('👁️ Eye-level view — drag to look around, scroll out to leave', 3500);
+}
+function leaveStanding() {
+  if (!app.standing) return;
+  app.standing = false;
+  controls.minDistance = 150;
+  controls.maxPolarAngle = Math.PI * 0.47;
 }
 
 // ---------- Weather → scene ----------
@@ -137,7 +159,11 @@ function refreshWeather() {
   u.uFresh.value = THREE.MathUtils.clamp((s.snow24 ?? 0) / 15, 0, 1);
   u.uWet.value = THREE.MathUtils.clamp((s.rain ?? 0) / 1.5 + ((s.temp ?? 0) > 2 ? 0.4 : 0), 0, 1);
   app.effects.apply(s, new Date(app.time), app.exag);
+  u.uWindTo.value.copy(app.effects.windTo).normalize();
+  u.uWindStr.value = app.effects.windStrength;
+  u.uSparkle.value = app.effects.sunLight * (0.35 + 0.65 * u.uFresh.value) * (s.topDepth > 0.02 ? 1 : 0);
   updateConditions(s);
+  app.cps?.refresh();
   updateResortBadges();
   const i = app.times.length ? nearestIndex(app.time) : 0;
   $('#tl').value = i;
@@ -294,8 +320,13 @@ function renderQueues() {
 }
 
 // ---------- Panels & UI wiring ----------
+// Toggle a panel (clicking its button again closes it).
 function openPanel(id) {
-  for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== id || !p.hidden;
+  showPanel(id && $(`#${id}`).hidden ? id : null);
+}
+function showPanel(id) {
+  for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== id;
+  $('#btn-cps').classList.toggle('on', !$('#panel-cplist').hidden);
   $('#btn-forecast').classList.toggle('on', !$('#panel-forecast').hidden);
   $('#btn-queue').classList.toggle('on', !$('#panel-queue').hidden);
   app.queueOn = !$('#panel-queue').hidden;
@@ -320,6 +351,7 @@ function wireUI() {
   $('#btn-queue').onclick = () => openPanel('panel-queue');
   $('#btn-layers').onclick = () => openPanel('panel-layers');
   $('#btn-help').onclick = () => openPanel('panel-help');
+  $('#btn-cps').onclick = () => openPanel('panel-cplist');
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => openPanel(null)));
   $('#btn-collapse-cond').onclick = () => $('#conditions').classList.toggle('collapsed');
 
@@ -335,6 +367,7 @@ function wireUI() {
   bind('#l-liftlabels', on => (app.liftLabels = on)); // per-label visibility handled in the render loop
   bind('#l-labels', on => o.labelGroup.children.forEach(c => (c.visible = on))); // CSS2D ignores parent visibility
   bind('#l-stylized', on => app.terrain.setStylized(on));
+  bind('#l-cps', on => app.cps.setVisible(on));
   $('#l-demo').onchange = e => { app.demo = e.target.checked; refreshWeather(); if (app.queueOn) renderQueues(); };
   const ex = $('#l-exag');
   ex.value = app.exag;
@@ -375,7 +408,7 @@ function wireUI() {
       arrowup: () => pan(0, 1), w: () => pan(0, 1), arrowdown: () => pan(0, -1), s: () => pan(0, -1),
       q: navs.rotl, e: navs.rotr, r: navs.tiltup, f: navs.tiltdown, '+': navs.zoomin, '=': navs.zoomin, '-': navs.zoomout,
       n: northUp, 0: () => goTo('overview'), 1: () => goTo('annupuri'), 2: () => goTo('village'), 3: () => goTo('hirafu'), 4: () => goTo('hanazono'),
-      ' ': () => togglePlay(), escape: () => openPanel(null),
+      ' ': () => togglePlay(), escape: () => openPanel(null), c: () => openPanel('panel-cplist'),
     };
     if (map[k]) { e.preventDefault(); map[k](); }
   });
@@ -390,8 +423,16 @@ function wireUI() {
     ray.setFromCamera(ndc, camera);
     return ray.intersectObjects(objs, false)[0];
   };
+  // Placing a custom checkpoint: next click on the terrain.
+  let downAt = null;
+  renderer.domElement.addEventListener('pointerdown', ev => { downAt = [ev.clientX, ev.clientY]; });
+  renderer.domElement.addEventListener('pointerup', ev => {
+    if (!app.cps?.placing || !downAt || Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) > 6) return;
+    const hit = pick(ev, app.terrain.meshes);
+    if (hit) app.cps.place(new THREE.Vector3(hit.point.x, hit.point.y / app.exag, hit.point.z));
+  });
   renderer.domElement.addEventListener('dblclick', ev => {
-    const hit = pick(ev, [app.terrain.mesh]);
+    const hit = pick(ev, app.terrain.meshes);
     if (!hit) return;
     const off = camera.position.clone().sub(controls.target).multiplyScalar(0.5);
     if (off.length() < 400) off.setLength(400);
@@ -413,7 +454,7 @@ function wireUI() {
       const d = pisteHit.object.userData;
       html = `<b>⛷️ ${d.name ?? 'Unnamed run'}</b><br><small>${d.diff} · ${RESORTS.find(r => r.id === d.resort)?.name ?? ''}</small>`;
     } else {
-      const hit = pick(ev, [app.terrain.mesh]);
+      const hit = pick(ev, app.terrain.meshes);
       if (hit && ev.shiftKey) {
         const ll = app.terrain.frame.toLatLon(hit.point.x, hit.point.z);
         const h = hit.point.y / app.exag;
@@ -428,6 +469,7 @@ function wireUI() {
   });
   renderer.domElement.addEventListener('pointerleave', () => ($('#tooltip').hidden = true));
   controls.addEventListener('start', () => { anim.active = false; });
+  controls.addEventListener('change', () => { if (app.standing && camera.position.distanceTo(controls.target) > 400) leaveStanding(); });
 
   // Minimap
   const mm = $('#minimap');
@@ -476,13 +518,14 @@ function drawMinimap() {
 }
 
 // ---------- Share & screenshot ----------
-function share() {
+function share(extra = {}) {
   const ll = app.terrain.frame.toLatLon(controls.target.x, controls.target.z);
   const off = camera.position.clone().sub(controls.target);
   const sph = new THREE.Spherical().setFromVector3(off);
   const h = new URLSearchParams({ v: [ll.lat.toFixed(5), ll.lon.toFixed(5), Math.round(sph.radius), sph.theta.toFixed(3), sph.phi.toFixed(3)].join(','), t: Math.abs(app.time - Date.now()) > 2 * 36e5 ? Math.round(app.time / 36e5) : '' });
   if (app.focus) h.set('r', app.focus);
   if (app.demo) h.set('demo', 1);
+  if (extra.cp) h.set('cp', extra.cp);
   const url = `${location.origin}${location.pathname}#${h}`;
   history.replaceState(null, '', url);
   if (navigator.share && matchMedia('(pointer: coarse)').matches) navigator.share({ title: 'Niseko Snow 3D', url }).catch(() => {});
@@ -493,6 +536,7 @@ function restoreFromHash() {
   if (h.get('demo')) { app.demo = true; $('#l-demo').checked = true; }
   if (h.get('t')) app.time = Number(h.get('t')) * 36e5;
   if (h.get('r')) app.focus = h.get('r');
+  app.pendingCp = h.get('cp');
   const v = h.get('v')?.split(',').map(Number);
   if (!v || v.length < 5 || v.some(Number.isNaN)) return false;
   const p = app.terrain.frame.toLocal(v[0], v[1]);
@@ -520,6 +564,21 @@ function screenshot() {
 function applyExag() {
   app.terrain.setExaggeration(app.exag);
   app.overlays.group.scale.y = app.exag;
+  app.effects?.setExaggeration(app.exag);
+}
+
+// Extra-sharp aerial photo around the view when zoomed in.
+let hdCheck = 0;
+function maybeLoadHD() {
+  const now = performance.now();
+  if (app.hdLoading || anim.active || now - hdCheck < 700) return;
+  hdCheck = now;
+  const dist = camera.position.distanceTo(controls.target);
+  if (dist > 2800) return;
+  const P = app.terrain.patch, t = controls.target;
+  if (P && Math.hypot(P.x - t.x, P.z - t.z) < P.size * 0.28) return;
+  app.hdLoading = true;
+  app.terrain.loadHDPatch(t.x, t.z).finally(() => { app.hdLoading = false; });
 }
 
 // ---------- Main loop ----------
@@ -538,10 +597,13 @@ function frame() {
     const { frame: f } = app.terrain;
     controls.target.x = THREE.MathUtils.clamp(controls.target.x, -f.width / 2, f.width / 2);
     controls.target.z = THREE.MathUtils.clamp(controls.target.z, -f.depth / 2, f.depth / 2);
-    const g = elevAt(camera.position.x, camera.position.z) + 40;
+    const g = elevAt(camera.position.x, camera.position.z) + (app.standing ? 1.5 * app.exag : 40);
     if (camera.position.y < g) camera.position.y = g;
-    if (!anim.active) controls.target.y += (elevAt(controls.target.x, controls.target.z) - controls.target.y) * 0.1;
+    const tg = elevAt(controls.target.x, controls.target.z) + (app.standing ? 1.8 * app.exag : 0);
+    if (!anim.active) controls.target.y += (tg - controls.target.y) * 0.1;
+    maybeLoadHD();
   }
+  app.cps?.update();
   if (app.playing && app.times.length) {
     playAcc += dt * Number($('#tl-speed').value);
     if (playAcc >= 1) {
@@ -592,6 +654,12 @@ async function boot() {
   app.demo ||= !app.weather;
   $('#l-demo').checked = app.demo;
 
+  app.cps = initCheckpoints({
+    terrain: app.terrain, overlays: app.overlays, osm, camera, controls, $, flyTo, toast, showPanel, share,
+    getTime: () => app.time, getExag: () => app.exag,
+    queueFor: lift => { const est = estimateQueues(new Date(app.time), queueWx(app.time)); return est.open ? est.lift(lift) : null; },
+    onStand: standAt,
+  });
   const restored = restoreFromHash();
   if (!restored) { const v = viewFor('overview'); controls.target.copy(v.target); camera.position.copy(v.pos); }
   if (app.weather) setupTimeline();
@@ -600,7 +668,10 @@ async function boot() {
   bar.style.width = '100%';
   $('#loader').classList.add('done');
   setTimeout(() => $('#loader').remove(), 800);
-  if (!restored) setTimeout(() => goTo(app.focus ?? 'overview', 2200), 300);
+  if (app.pendingCp) {
+    const id = app.pendingCp.includes(',') ? app.cps.addShared(app.pendingCp) : app.pendingCp;
+    if (id) setTimeout(() => app.cps.open(id, !restored), 600);
+  } else if (!restored) setTimeout(() => goTo(app.focus ?? 'overview', 2200), 300);
 
   loadForecast().then(() => { if (!$('#panel-forecast').hidden) renderForecastPanel(); })
     .catch(e => { $('#fc-cards').innerHTML = `<div class="card">⚠️ Forecast unavailable: ${e.message}</div>`; });
