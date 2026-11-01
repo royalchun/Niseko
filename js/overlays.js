@@ -4,49 +4,89 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { RESORTS, PISTE_COLORS, SUMMIT } from './config.js';
+import { RESORTS, PISTE_COLORS, SUMMIT, BC_AREAS } from './config.js';
 
 const resortColor = id => RESORTS.find(r => r.id === id)?.color ?? '#94a3b8';
 
 export function buildOverlays({ osm, terrain, onResortClick }) {
   const { frame, elevationAt } = terrain;
   const group = new THREE.Group();
-  const pisteGroup = new THREE.Group(), liftGroup = new THREE.Group(), labelGroup = new THREE.Group(), liftLabelGroup = new THREE.Group();
-  group.add(pisteGroup, liftGroup, labelGroup, liftLabelGroup);
+  const pisteGroup = new THREE.Group(), offGroup = new THREE.Group(), liftGroup = new THREE.Group(), labelGroup = new THREE.Group(),
+    liftLabelGroup = new THREE.Group(), runLabelGroup = new THREE.Group();
+  group.add(pisteGroup, offGroup, liftGroup, labelGroup, liftLabelGroup, runLabelGroup);
   const materials = [];
 
-  const lineMat = (color, width, opacity = 1) => {
-    const m = new LineMaterial({ color, linewidth: width, transparent: opacity < 1, opacity, depthTest: true });
+  const lineMat = (color, width, opacity = 1, dash = null) => {
+    const m = new LineMaterial({ color, linewidth: width, transparent: opacity < 1, opacity, depthTest: true, ...(dash ? { dashed: true, dashSize: dash[0], gapSize: dash[1] } : {}) });
     m.resolution.set(innerWidth, innerHeight);
     materials.push(m);
     return m;
   };
 
-  // Drape a lat/lon polyline on the terrain, densifying every ~15 m.
+  // Drape a lat/lon polyline on the terrain, densifying every ~6 m (5 m DEM).
   function drape(pts, lift) {
     const out = [];
     const local = pts.map(([lat, lon]) => frame.toLocal(lat, lon));
     for (let i = 0; i < local.length - 1; i++) {
       const a = local[i], b = local[i + 1];
-      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 15));
+      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 6));
       for (let k = 0; k < n; k++) {
         const x = a.x + (b.x - a.x) * k / n, z = a.z + (b.z - a.z) * k / n;
-        out.push(x, elevationAt(x, z) + (lift ? 0 : 3), z);
+        out.push(x, elevationAt(x, z) + (lift ? 0 : 5), z);
       }
     }
     const l = local[local.length - 1];
-    out.push(l.x, elevationAt(l.x, l.z) + (lift ? 0 : 3), l.z);
+    out.push(l.x, elevationAt(l.x, l.z) + (lift ? 0 : 5), l.z);
     return out;
   }
 
-  // Pistes
+  // Pistes: coloured line on a contrasting casing (white for black runs, dark otherwise),
+  // plus a run-name label shown when zoomed in. Ungroomed / off-piste routes are dashed orange.
+  const named = new Set();
   for (const p of osm.pistes) {
     if (p.pts.length < 2) continue;
-    const g = new LineGeometry();
-    g.setPositions(drape(p.pts, false));
-    const line = new Line2(g, lineMat(PISTE_COLORS[p.diff] ?? PISTE_COLORS.unknown, 2.2, 0.85));
-    line.userData = { kind: 'piste', resort: p.resort, name: p.name, diff: p.diff };
-    pisteGroup.add(line);
+    const pos = drape(p.pts, false);
+    const dark = p.diff === 'advanced' || p.diff === 'expert';
+    const target = p.offpiste ? offGroup : pisteGroup;
+    const casingGeo = new LineGeometry(); casingGeo.setPositions(pos);
+    // Thin, light casing so the run colour stays dominant (white halo behind black runs).
+    const casing = new Line2(casingGeo, p.offpiste ? lineMat('#0f172a', 5, 0.45) : dark ? lineMat('#ffffff', 6.5, 0.85) : lineMat('#0f172a', 6, 0.3));
+    casing.renderOrder = 1;
+    const g = new LineGeometry(); g.setPositions(pos);
+    const line = new Line2(g, p.offpiste ? lineMat('#f59e0b', 3, 1, [14, 9]) : lineMat(PISTE_COLORS[p.diff] ?? PISTE_COLORS.unknown, 4, 1));
+    if (p.offpiste) line.computeLineDistances();
+    line.renderOrder = 2;
+    line.userData = casing.userData = { kind: 'piste', resort: p.resort, name: p.name, diff: p.diff, offpiste: !!p.offpiste };
+    target.add(casing, line);
+
+    // One label per run name, at the middle of its longest segment.
+    const key = `${p.name}|${p.resort}`;
+    if (p.name && !named.has(key)) {
+      named.add(key);
+      const longest = osm.pistes.filter(q => q.name === p.name && q.resort === p.resort).sort((x, y) => y.pts.length - x.pts.length)[0];
+      const [la, lo] = longest.pts[Math.floor(longest.pts.length / 2)];
+      const q = frame.toLocal(la, lo);
+      const el = document.createElement('div');
+      el.className = `label run-label ${p.offpiste ? 'off' : ''}`;
+      el.style.setProperty('--c', p.offpiste ? '#f59e0b' : dark ? '#e2e8f0' : PISTE_COLORS[p.diff] ?? '#9ca3af');
+      el.textContent = p.offpiste ? `⚠ ${p.name}` : p.name;
+      const obj = new CSS2DObject(el);
+      obj.position.set(q.x, elevationAt(q.x, q.z) + 12, q.z);
+      obj.userData.offpiste = !!p.offpiste;
+      runLabelGroup.add(obj);
+    }
+  }
+
+  // Backcountry zone names (approximate).
+  for (const a of BC_AREAS) {
+    const q = frame.toLocal(a.lat, a.lon);
+    const el = document.createElement('div');
+    el.className = 'label bc-label';
+    el.textContent = `≈ ${a.name}`;
+    const obj = new CSS2DObject(el);
+    obj.position.set(q.x, elevationAt(q.x, q.z) + 30, q.z);
+    obj.userData.offpiste = true;
+    runLabelGroup.add(obj);
   }
 
   // Lifts: straight cable between terrain-anchored stations + towers.
@@ -125,7 +165,7 @@ export function buildOverlays({ osm, terrain, onResortClick }) {
   }
 
   return {
-    group, pisteGroup, liftGroup, labelGroup, liftLabelGroup, resortLabels, lifts,
+    group, pisteGroup, offGroup, liftGroup, labelGroup, liftLabelGroup, runLabelGroup, resortLabels, lifts,
     setResolution(w, h) { for (const m of materials) m.resolution.set(w, h); },
     // Colour lifts by an estimated queue (or restore resort colours).
     paintQueues(fn) {

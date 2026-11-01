@@ -6,18 +6,23 @@ export const BBOX = { south: 42.832, north: 42.902, west: 140.615, east: 140.722
 export const SUMMIT = { lat: 42.8750, lon: 140.6588, ele: 1308, name: 'Mt. Niseko Annupuri' };
 
 // Quality presets — chosen in the Layers panel, stored in localStorage.
+// demZoom 15 = GSI 5 m elevation; hdZoom = extra-sharp photo patch around the view.
 export const QUALITY = {
-  ultra:    { label: 'Ultra (4K / retina)', demZoom: 14, imgZoom: 16, segments: 1024, pixelRatio: 2,   shadows: true,  maxFlakes: 80000 },
-  high:     { label: 'High',                demZoom: 14, imgZoom: 15, segments: 768,  pixelRatio: 2,   shadows: true,  maxFlakes: 50000 },
-  balanced: { label: 'Balanced (phones)',   demZoom: 13, imgZoom: 15, segments: 384,  pixelRatio: 1.5, shadows: false, maxFlakes: 20000 },
+  ultra:    { label: 'Ultra (4K / retina)', demZoom: 15, imgZoom: 16, segments: 1800, pixelRatio: 2,   shadows: true,  shadowMap: 8192, maxFlakes: 140000, nearFlakes: 9000, hdZoom: 18, hdTiles: 10 },
+  high:     { label: 'High',                demZoom: 15, imgZoom: 16, segments: 1100, pixelRatio: 2,   shadows: true,  shadowMap: 4096, maxFlakes: 80000,  nearFlakes: 6000, hdZoom: 18, hdTiles: 8 },
+  balanced: { label: 'Balanced (phones)',   demZoom: 14, imgZoom: 15, segments: 640,  pixelRatio: 1.5, shadows: false, shadowMap: 2048, maxFlakes: 25000,  nearFlakes: 2500, hdZoom: 17, hdTiles: 6 },
 };
 
 // Free, key-less tile sources (CORS enabled).
 export const TILES = {
-  // AWS Open Data "Terrarium" elevation tiles (Mapzen / Tilezen, mostly SRTM + GSI in Japan).
-  dem: (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`,
-  // Esri World Imagery satellite tiles (free for non-commercial use with attribution).
-  img: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
+  // GSI (Geospatial Information Authority of Japan) elevation: 5 m (z15) and 10 m (z14).
+  demGSI5: (z, x, y) => `https://cyberjapandata.gsi.go.jp/xyz/dem5c_png/${z}/${x}/${y}.png`,
+  demGSI10: (z, x, y) => `https://cyberjapandata.gsi.go.jp/xyz/dem_png/${z}/${x}/${y}.png`,
+  // AWS Open Data "Terrarium" elevation (SRTM-based) — fallback.
+  demAWS: (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`,
+  // GSI seamless aerial photos (sharpest for Japan), Esri World Imagery as fallback.
+  imgGSI: (z, x, y) => `https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/${z}/${x}/${y}.jpg`,
+  imgEsri: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
 };
 
 // Open-Meteo (free, no API key, non-commercial use).
@@ -57,3 +62,56 @@ export const WEATHER_POINTS = [
 ];
 
 export const PISTE_COLORS = { easy: '#22c55e', novice: '#22c55e', intermediate: '#ef4444', advanced: '#111827', expert: '#111827', freeride: '#f59e0b', unknown: '#9ca3af' };
+
+// On-mountain checkpoints (coordinates from OpenStreetMap; ✳ = approximate).
+// type: base | food | lift | summit | terrain
+export const CHECKPOINTS = [
+  { id: 'hana308', name: 'Hanazono 308 (base lodge & canteen)', resort: 'hanazono', type: 'food', lat: 42.89325, lon: 140.69989, blurb: 'Main Hanazono base building — Café HANAZONO 308, rentals, ski school and lockers.' },
+  { id: 'hana1', name: 'HANA1 Café', resort: 'hanazono', type: 'food', lat: 42.89150, lon: 140.69969, blurb: 'Café next to the Hanazono Hooded Lift #1 base.' },
+  { id: 'hanaSymTop', name: 'Symphony Gondola top', resort: 'hanazono', type: 'lift', lat: 42.88942, lon: 140.68350, blurb: 'Top of the Hanazono Symphony Gondola.' },
+  { id: 'strawberry', name: 'Strawberry Fields ✳', resort: 'hanazono', type: 'terrain', lat: 42.8800, lon: 140.6800, blurb: 'Hanazono\'s famous gladed tree zone (approximate location). Check gate status before entering.' },
+  { id: 'hanaQ3Top', name: 'Hanazono Quad #3 top', resort: 'hanazono', type: 'lift', lat: 42.87309, lon: 140.66767, blurb: 'Highest Hanazono lift — links across to Hirafu\'s upper mountain.' },
+  { id: 'hirafuBase', name: 'Hirafu Welcome Center', resort: 'hirafu', type: 'base', lat: 42.85835, lon: 140.70201, blurb: 'Grand Hirafu main base: Ace Family Quad, tickets and the bus terminal.' },
+  { id: 'kumo', name: 'Kumo Restaurant', resort: 'hirafu', type: 'food', lat: 42.86290, lon: 140.69821, blurb: 'On-mountain restaurant near the King gondola base area.' },
+  { id: 'kiosk', name: 'Mountain Kiosk Coffee', resort: 'hirafu', type: 'food', lat: 42.86248, lon: 140.69863, blurb: 'Coffee stop on the lower Hirafu slopes.' },
+  { id: 'boyoso', name: 'Boyoso', resort: 'hirafu', type: 'food', lat: 42.86804, lon: 140.69339, blurb: 'Classic mid-mountain lodge — curry and ramen with Mt. Yotei views.' },
+  { id: 'nest813', name: 'NEST813 / Ace Gondola top', resort: 'hirafu', type: 'food', lat: 42.86776, lon: 140.68015, blurb: 'Restaurant at about 813 m beside the Ace Gondola top station.' },
+  { id: 'hut1000', name: '1000m Hut', resort: 'hirafu', type: 'food', lat: 42.86809, lon: 140.66920, blurb: 'Small hut around 1,000 m — warm up before the summit lifts.' },
+  { id: 'king4Top', name: 'King #4 top / summit gate', resort: 'hirafu', type: 'lift', lat: 42.87167, lon: 140.66246, blurb: 'Highest lift at Hirafu. Hike to the summit only through an open gate.' },
+  { id: 'villageBase', name: 'Niseko Village base', resort: 'village', type: 'base', lat: 42.84696, lon: 140.68420, blurb: 'Niseko Gondola base by the Hilton.' },
+  { id: 'villageGondTop', name: 'Niseko Gondola top', resort: 'village', type: 'lift', lat: 42.86567, lon: 140.66726, blurb: 'Top of the Niseko Village gondola.' },
+  { id: 'lookout', name: 'The Lookout Café', resort: 'village', type: 'food', lat: 42.86188, lon: 140.66632, blurb: 'Café at the top of the Niseko Gondola with Yotei views.' },
+  { id: 'annupuriBase', name: 'Annupuri base & food court', resort: 'annupuri', type: 'base', lat: 42.84846, lon: 140.64619, blurb: 'Annupuri base centre with food court and gondola.' },
+  { id: 'nook', name: 'Nook Annupuri', resort: 'annupuri', type: 'food', lat: 42.84918, lon: 140.64543, blurb: 'Restaurant at the Annupuri base.' },
+  { id: 'paradise', name: 'Paradise Hut', resort: 'annupuri', type: 'food', lat: 42.85626, lon: 140.65240, blurb: 'Mid-mountain hut on the Annupuri side.' },
+  { id: 'annupuriGondTop', name: 'Annupuri Gondola top', resort: 'annupuri', type: 'lift', lat: 42.86447, lon: 140.66113, blurb: 'Top of the Annupuri Gondola.' },
+  { id: 'summit', name: 'Niseko Annupuri summit', resort: 'summit', type: 'summit', lat: 42.8750, lon: 140.6588, blurb: '1,308 m peak. Reached by a short hike from the summit gates when they are open.' },
+];
+export const CHECKPOINT_ICONS = { base: '🏠', food: '🍜', lift: '🚡', summit: '⛰️', terrain: '🌲', custom: '📌', gate: '🚧' };
+
+// Niseko backcountry gates (Niseko Rules). Names, elevations and destinations from published
+// gate guides; map positions are APPROXIMATE (matched to the stated elevation on the 5 m DEM
+// next to the lift that serves each gate). null position = not confirmed, listed only.
+export const GATES = [
+  { id: 'G1', name: 'G1 · L-ji gate', ele: 1050, resort: 'annupuri', lat: 42.86932, lon: 140.65456, leads: 'Trees west of Annupuri resort.' },
+  { id: 'G2', name: 'G2 · Annupuri peak gate', ele: 1170, resort: 'annupuri', lat: 42.86922, lon: 140.66139, leads: 'Annupuri peak; traverse across to the Back Bowl.' },
+  { id: 'G3', name: 'G3 · Hirafu peak gate', ele: 1180, resort: 'hirafu', lat: 42.87179, lon: 140.66234, leads: 'Summit hike → Higashi-One (East Ridge), North Face and Back Bowl.' },
+  { id: 'G4', name: 'G4 · Fujiwara gate', ele: 1180, resort: 'hirafu', lat: 42.87158, lon: 140.66285, leads: 'Next to the top of King Lift #4 → Fujiwara-no-sawa and a traverse across Higashi-One.' },
+  { id: 'G5', name: 'G5 · Hanazono gate', ele: 1050, resort: 'hanazono', lat: 42.87309, lon: 140.66767, leads: 'Near Hanazono Quad #3 → traverse toward Higashi-One when G3/G4 are closed; wooded slopes.' },
+  { id: 'G6', name: 'G6 · Moiwa peak gate', ele: 800, resort: 'other', lat: 42.86320, lon: 140.63300, leads: 'Mikaeri-no-sawa, Annupuri west face and the Goshiki onsen area.' },
+  { id: 'G7', name: 'G7 · Ee-sawa gate', ele: 790, resort: 'other', lat: 42.86215, lon: 140.63175, leads: 'Ee-sawa. Riding down into the Yu-no-sawa off-limits area is strictly prohibited.' },
+  { id: 'G8', name: 'G8 · Hachi-ban gate', ele: 950, resort: 'annupuri', lat: 42.86392, lon: 140.66148, leads: 'Lower O-sawa area. Beware of cornice slopes on the opposite side.' },
+  { id: 'G9', name: 'G9 · Waterfall gate', ele: 730, resort: null, lat: null, lon: null, leads: 'A gully with a waterfall; stays closed until the waterfall is buried.' },
+  { id: 'G10', name: 'G10 · Anbetsu gate', ele: 760, resort: null, lat: null, lon: null, leads: 'Deep snow with a cliff at the bottom of the valley.' },
+  { id: 'G11', name: 'G11 · Niseko Village gate', ele: 930, resort: 'village', lat: 42.86472, lon: 140.66848, leads: 'Mizuno-no-sawa limited-access controlled area — opened only when avalanche risk is low.' },
+];
+
+// Well-known backcountry zones, labelled approximately (≈).
+export const BC_AREAS = [
+  { name: 'Higashi-One (East Ridge)', lat: 42.8778, lon: 140.6655 },
+  { name: 'North Face', lat: 42.8808, lon: 140.6578 },
+  { name: 'Back Bowl', lat: 42.8792, lon: 140.6500 },
+  { name: 'Mizuno-no-sawa', lat: 42.8612, lon: 140.6738 },
+  { name: 'O-sawa', lat: 42.8578, lon: 140.6622 },
+];
+export const GATE_INFO_URL = 'https://www.niseko.ne.jp/en/niseko-rules/';
