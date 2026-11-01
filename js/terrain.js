@@ -2,7 +2,7 @@
 // with a 5 m lighting (normal) map and a detailed snow-cover shader:
 // depth by elevation, slope shedding, wind loading, sastrugi ripples, sparkle.
 import * as THREE from 'three';
-import { TILES } from './config.js';
+import { TILES, PISTE_COLORS } from './config.js';
 import { tileRange, makeFrame, tx2lon, ty2lat, lon2tx, lat2ty } from './geo.js';
 
 function loadImage(url) {
@@ -116,6 +116,7 @@ function makeUniforms() {
     uWindTo: { value: new THREE.Vector2(1, 0) }, // unit vector the wind blows toward (x, z)
     uWindStr: { value: 0 },     // 0..1
     uSparkle: { value: 0 },     // sunlit glitter strength
+    uTrails: { value: 1 },      // painted ski-run bands on/off
   };
 }
 
@@ -123,6 +124,7 @@ const SNOW_COMMON = `
 varying vec3 vSnowPos; varying vec3 vSnowNormal;
 uniform float uDepthBase, uDepthTop, uElevBase, uElevTop, uFresh, uWet, uStylized, uExag, uWindStr, uSparkle;
 uniform vec2 uWindTo;
+uniform sampler2D uTrailMap; uniform float uTrails;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
   return mix(mix(hash12(i), hash12(i+vec2(1,0)), f.x), mix(hash12(i+vec2(0,1)), hash12(i+vec2(1,1)), f.x), f.y); }
@@ -161,7 +163,10 @@ snowCol = mix(snowCol, vec3(0.62,0.64,0.66), uWet * 0.6);
 float lum = dot(diffuseColor.rgb, vec3(0.299,0.587,0.114));
 float darkForest = (1.0 - smoothstep(0.08, 0.25, lum)) * (1.0 - uStylized);
 float snowCover = cover * (1.0 - treeShow - darkForest * 0.25 * (1.0 - 0.6 * uFresh));
-diffuseColor.rgb = mix(diffuseColor.rgb, snowCol * (0.92 + 0.08 * n), snowCover);`;
+diffuseColor.rgb = mix(diffuseColor.rgb, snowCol * (0.92 + 0.08 * n), snowCover);
+// Ski runs painted on top of everything, like a printed trail map.
+vec4 trail = texture2D(uTrailMap, vNormalMapUv);
+diffuseColor.rgb = mix(diffuseColor.rgb, trail.rgb, trail.a * uTrails);`;
 
 const SNOW_NORMAL = `
 {
@@ -186,12 +191,15 @@ const SNOW_EMISSIVE = `
   totalEmissiveRadiance += vec3(glint * 4.0);
 }`;
 
-function makeSnowMaterial(uniforms, map, normalMap, extra = {}) {
+const EMPTY_TEX = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+EMPTY_TEX.needsUpdate = true;
+
+function makeSnowMaterial(uniforms, map, normalMap, trailTex, extra = {}) {
   const mat = new THREE.MeshStandardMaterial({
     map, normalMap, normalMapType: THREE.ObjectSpaceNormalMap, roughness: 0.93, metalness: 0, ...extra,
   });
   mat.onBeforeCompile = shader => {
-    Object.assign(shader.uniforms, uniforms);
+    Object.assign(shader.uniforms, uniforms, { uTrailMap: { value: trailTex ?? EMPTY_TEX } });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vSnowPos;\nvarying vec3 vSnowNormal;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvSnowPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvSnowNormal = normalize(objectNormal);');
@@ -202,7 +210,7 @@ function makeSnowMaterial(uniforms, map, normalMap, extra = {}) {
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${SNOW_NORMAL}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${SNOW_EMISSIVE}`);
   };
-  mat.customProgramCacheKey = () => 'niseko-snow-v2';
+  mat.customProgramCacheKey = () => 'niseko-snow-v3';
   return mat;
 }
 
@@ -229,6 +237,33 @@ function normalCanvas(sample, w, h, dx, dz) {
   return t;
 }
 
+// Paint ski runs into a transparent canvas. project(lat, lon) → [px, py]; mpp = metres per pixel.
+function trailCanvas(trails, w, h, project, mpp) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.lineCap = g.lineJoin = 'round';
+  const path = pts => { g.beginPath(); pts.forEach(([la, lo], i) => { const [x, y] = project(la, lo); i ? g.lineTo(x, y) : g.moveTo(x, y); }); };
+  const W = m => Math.max(1.5, m / mpp);
+  const on = trails.filter(t => !t.offpiste), off = trails.filter(t => t.offpiste);
+  g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = W(34);           // white edge
+  for (const t of on) { path(t.pts); g.stroke(); }
+  for (const t of on) {                                                      // coloured band
+    g.strokeStyle = PISTE_COLORS[t.diff] ?? PISTE_COLORS.unknown;
+    g.globalAlpha = t.diff === 'advanced' || t.diff === 'expert' ? 0.75 : 0.62;
+    g.lineWidth = W(22); path(t.pts); g.stroke();
+  }
+  g.globalAlpha = 1;
+  g.setLineDash([W(16), W(10)]);
+  g.strokeStyle = 'rgba(15,23,42,0.55)'; g.lineWidth = W(14);
+  for (const t of off) { path(t.pts); g.stroke(); }
+  g.strokeStyle = '#f59e0b'; g.lineWidth = W(8);
+  for (const t of off) { path(t.pts); g.stroke(); }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function heightGeometry(width, depth, segX, segZ, cx, cz, elevationAt, lift = 0) {
   const geo = new THREE.PlaneGeometry(width, depth, segX, segZ);
   geo.rotateX(-Math.PI / 2);
@@ -239,7 +274,7 @@ function heightGeometry(width, depth, segX, segZ, cx, cz, elevationAt, lift = 0)
   return geo;
 }
 
-export async function buildTerrain({ quality, renderer, onProgress }) {
+export async function buildTerrain({ quality, renderer, onProgress, trails = [] }) {
   const demRange = tileRange(quality.demZoom);
   const k = 2 ** (quality.imgZoom - quality.demZoom);
   const nDx = demRange.x1 - demRange.x0 + 1, nDy = demRange.y1 - demRange.y0 + 1;
@@ -307,8 +342,14 @@ export async function buildTerrain({ quality, renderer, onProgress }) {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = aniso;
     nTex.anisotropy = aniso;
-    const mat = makeSnowMaterial(uniforms, tex, nTex);
+    // Trail paint at half the photo resolution (≈3.5 m/px at z16).
+    const tw = ch.canvas.width / 2, th = ch.canvas.height / 2, dz = quality.demZoom;
+    const trTex = trailCanvas(trails, tw, th,
+      (la, lo) => [(lon2tx(lo, dz) - ch.dx0) / ch.ndx * tw, (lat2ty(la, dz) - ch.dy0) / ch.ndy * th], width / tw);
+    trTex.anisotropy = aniso;
+    const mat = makeSnowMaterial(uniforms, tex, nTex, trTex);
     mat.userData.photo = tex;
+    mat.userData.trail = trTex;
     materials.push(mat);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(cx, 0, cz);
@@ -362,7 +403,11 @@ export async function buildTerrain({ quality, renderer, onProgress }) {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = aniso;
-    const mat = makeSnowMaterial(uniforms, uniforms.uStylized.value ? null : tex, nTex, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const tr = 1024;
+    const trTex = trailCanvas(trails, tr, tr, (la, lo) => [(lon2tx(lo, pz) - tx0) / n * tr, (lat2ty(la, pz) - ty0) / n * tr], width / tr);
+    trTex.anisotropy = aniso;
+    const mat = makeSnowMaterial(uniforms, uniforms.uStylized.value ? null : tex, nTex, trTex, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    mat.userData.trail = trTex;
     mat.userData.photo = tex;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(cx, 0, cz);
@@ -378,6 +423,7 @@ export async function buildTerrain({ quality, renderer, onProgress }) {
     m.geometry.dispose();
     m.material.userData.photo?.dispose();
     m.material.normalMap?.dispose();
+    m.material.userData.trail?.dispose();
     m.material.dispose();
   }
 
@@ -385,6 +431,7 @@ export async function buildTerrain({ quality, renderer, onProgress }) {
     mesh: group, meshes: group.children, frame, uniforms, elevationAt, minH, maxH, failed, total, miniCanvas: mini, heightTex,
     loadHDPatch, get patch() { return patch; },
     setExaggeration(e) { group.scale.y = e; uniforms.uExag.value = e; },
+    setTrails(on) { uniforms.uTrails.value = on ? 1 : 0; },
     setStylized(on) {
       uniforms.uStylized.value = on ? 1 : 0;
       for (const m of materials) { m.map = on ? null : m.userData.photo; m.needsUpdate = true; }

@@ -362,7 +362,9 @@ function wireUI() {
   const o = app.overlays;
   const bind = (id, fn) => { const el = $(id); el.onchange = () => fn(el.checked); fn(el.checked); };
   bind('#l-weather', on => app.effects.setVisible(on));
-  bind('#l-pistes', on => (o.pisteGroup.visible = on));
+  bind('#l-pistes', on => { o.pisteGroup.visible = on; app.terrain.setTrails(on); app.pistesOn = on; });
+  bind('#l-offpiste', on => { o.offGroup.visible = on; app.cps.setGatesVisible(on); app.offOn = on; });
+  bind('#l-runnames', on => (app.runNames = on));
   bind('#l-lifts', on => (o.liftGroup.visible = on));
   bind('#l-liftlabels', on => (app.liftLabels = on)); // per-label visibility handled in the render loop
   bind('#l-labels', on => o.labelGroup.children.forEach(c => (c.visible = on))); // CSS2D ignores parent visibility
@@ -444,7 +446,8 @@ function wireUI() {
     hoverT = performance.now();
     const tip = $('#tooltip');
     const liftHit = o.liftGroup.visible ? pick(ev, o.lifts.map(l => l.line)) : null;
-    const pisteHit = !liftHit && o.pisteGroup.visible && camera.position.distanceTo(controls.target) < 5000 ? pick(ev, o.pisteGroup.children) : null;
+    const runLines = [...(o.pisteGroup.visible ? o.pisteGroup.children : []), ...(o.offGroup.visible ? o.offGroup.children : [])];
+    const pisteHit = !liftHit && runLines.length && camera.position.distanceTo(controls.target) < 5000 ? pick(ev, runLines) : null;
     let html = '';
     if (liftHit) {
       const d = liftHit.object.userData;
@@ -452,7 +455,9 @@ function wireUI() {
       html = `<b>🚡 ${d.name}</b><br><small>${RESORTS.find(r => r.id === d.resort)?.name ?? 'Other area'} · ${d.type.replace('_', ' ')}</small>${q ? `<br>Est. queue: <b style="color:${q.color}">${q.text}</b>` : ''}`;
     } else if (pisteHit) {
       const d = pisteHit.object.userData;
-      html = `<b>⛷️ ${d.name ?? 'Unnamed run'}</b><br><small>${d.diff} · ${RESORTS.find(r => r.id === d.resort)?.name ?? ''}</small>`;
+      html = d.offpiste
+        ? `<b>⚠️ ${d.name ?? 'Ungroomed route'}</b><br><small>Ungroomed / off-piste · ${d.diff} · ${RESORTS.find(r => r.id === d.resort)?.name ?? ''}</small>`
+        : `<b>⛷️ ${d.name ?? 'Unnamed run'}</b><br><small>${d.diff} · ${RESORTS.find(r => r.id === d.resort)?.name ?? ''}</small>`;
     } else {
       const hit = pick(ev, app.terrain.meshes);
       if (hit && ev.shiftKey) {
@@ -619,6 +624,11 @@ function frame() {
   $('#needle').style.transform = `rotate(${-90 + (az * 180) / Math.PI}deg)`;
   // Hide lift labels when far away to avoid clutter.
   if (app.overlays) app.overlays.liftLabelGroup.children.forEach(o => (o.visible = (!!app.liftLabels || app.queueOn) && camera.position.distanceTo(o.position) < 4500));
+  // Run names only when zoomed in (zone names a bit further out).
+  if (app.overlays) app.overlays.runLabelGroup.children.forEach(o => {
+    const show = app.runNames && (o.userData.offpiste ? app.offOn : app.pistesOn);
+    o.visible = !!show && camera.position.distanceTo(o.position) < (o.element.classList.contains('bc-label') ? 6000 : 2600);
+  });
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
   if (app.terrain && (frame.n = (frame.n ?? 0) + 1) % 6 === 0) drawMinimap();
@@ -639,10 +649,10 @@ async function boot() {
   const msg = $('#loader-msg'), bar = $('#loader-bar');
   const weatherP = fetchHourly().catch(e => { console.warn('Weather failed', e); return null; });
   const osmP = fetch('data/niseko-osm.json').then(r => r.json());
-  app.terrain = await buildTerrain({ quality, renderer, onProgress: (p, failed) => { bar.style.width = `${Math.round(p * 85)}%`; msg.textContent = `Downloading terrain & satellite tiles… ${Math.round(p * 100)}%${failed ? ` (${failed} failed)` : ''}`; } });
+  const osm = await osmP;
+  app.terrain = await buildTerrain({ quality, renderer, trails: osm.pistes, onProgress: (p, failed) => { bar.style.width = `${Math.round(p * 85)}%`; msg.textContent = `Downloading terrain & satellite tiles… ${Math.round(p * 100)}%${failed ? ` (${failed} failed)` : ''}`; } });
   scene.add(app.terrain.mesh);
   msg.textContent = 'Placing lifts & ski runs…';
-  const osm = await osmP;
   app.overlays = buildOverlays({ osm, terrain: app.terrain, onResortClick: id => goTo(id) });
   scene.add(app.overlays.group);
   app.effects = buildEffects({ scene, renderer, terrain: app.terrain, quality });

@@ -3,7 +3,7 @@
 // aspect, nearby lifts (with queue estimate) and runs, plus an eye-level view.
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { API, CHECKPOINTS, CHECKPOINT_ICONS, RESORTS } from './config.js';
+import { API, CHECKPOINTS, CHECKPOINT_ICONS, RESORTS, GATES, GATE_INFO_URL } from './config.js';
 import { cached, getJSON, qs, jst, stateAt, slotAt, wmo } from './weather.js';
 import { sunPosition } from './effects.js';
 
@@ -40,7 +40,8 @@ export function initCheckpoints(ctx) {
   const { frame, elevationAt } = terrain;
   const group = new THREE.Group();
   overlays.group.add(group);
-  let all = [], active = null, chart = null, placing = false;
+  let all = [], active = null, chart = null, placing = false, showCps = true, showGates = true;
+  const unpinnedGates = GATES.filter(g => g.lat == null);
 
   // ---------- Terrain analysis ----------
   function localOf(cp) { return frame.toLocal(cp.lat, cp.lon); }
@@ -79,9 +80,11 @@ export function initCheckpoints(ctx) {
   function makeMarker(cp) {
     const p = localOf(cp);
     const el = document.createElement('button');
-    el.className = `label cp-marker ${cp.custom ? 'custom' : ''}`;
+    el.className = `label cp-marker ${cp.custom ? 'custom' : ''} ${cp.type === 'gate' ? 'gate' : ''}`;
     el.style.setProperty('--c', resortOf(cp.resort)?.color ?? '#e2e8f0');
-    el.innerHTML = `<span class="cp-ico">${CHECKPOINT_ICONS[cp.type] ?? '📍'}</span><span class="cp-name">${esc(cp.name)}</span>`;
+    el.innerHTML = cp.type === 'gate'
+      ? `<span class="gate-badge">${cp.gate}</span><span class="cp-name">${esc(cp.name.replace(/^G\d+ · /, ''))}</span>`
+      : `<span class="cp-ico">${CHECKPOINT_ICONS[cp.type] ?? '📍'}</span><span class="cp-name">${esc(cp.name)}</span>`;
     el.title = cp.name;
     el.addEventListener('click', e => { e.stopPropagation(); open(cp.id, true); });
     const obj = new CSS2DObject(el);
@@ -92,22 +95,36 @@ export function initCheckpoints(ctx) {
   }
   function rebuild() {
     for (const o of [...group.children]) { o.element.remove(); group.remove(o); }
-    all = [...CHECKPOINTS, ...loadCustom().map(c => ({ ...c, custom: true, type: 'custom' }))];
+    const gates = GATES.filter(g => g.lat != null).map(g => ({
+      id: g.id, gate: g.id, name: g.name, resort: g.resort, type: 'gate', lat: g.lat, lon: g.lon, ele: g.ele,
+      blurb: `Leads to: ${g.leads}`,
+    }));
+    all = [...CHECKPOINTS, ...gates, ...loadCustom().map(c => ({ ...c, custom: true, type: 'custom' }))];
     all.forEach(makeMarker);
+    applyVisibility();
     renderList();
+  }
+
+  function applyVisibility() {
+    for (const o of group.children) o.visible = o.userData.cp.type === 'gate' ? showGates : showCps;
   }
 
   // ---------- List panel ----------
   function renderList() {
     const q = ($('#cp-search')?.value ?? '').toLowerCase();
-    const groups = [...RESORTS.map(r => ({ id: r.id, name: r.name, color: r.color })), { id: 'summit', name: 'Summit', color: '#e2e8f0' }, { id: 'custom', name: 'My checkpoints', color: '#fbbf24' }];
+    const groups = [...RESORTS.map(r => ({ id: r.id, name: r.name, color: r.color })), { id: 'summit', name: 'Summit', color: '#e2e8f0' },
+      { id: 'gate', name: '🚧 Backcountry gates (positions approximate)', color: '#facc15' }, { id: 'custom', name: 'My checkpoints', color: '#fbbf24' }];
+    const inGroup = (c, g) => g.id === 'custom' ? c.custom : g.id === 'gate' ? c.type === 'gate' : !c.custom && c.type !== 'gate' && c.resort === g.id;
     $('#cp-list').innerHTML = groups.map(g => {
-      const items = all.filter(c => (g.id === 'custom' ? c.custom : !c.custom && c.resort === g.id) && c.name.toLowerCase().includes(q));
-      if (!items.length) return '';
+      const items = all.filter(c => inGroup(c, g) && c.name.toLowerCase().includes(q));
+      const extra = g.id === 'gate' ? unpinnedGates.filter(x => x.name.toLowerCase().includes(q))
+        .map(x => `<div class="cp-item static"><span class="gate-badge">${x.id}</span><span>${esc(x.name.replace(/^G\d+ · /, ''))} <small>≈${x.ele} m — location not confirmed, see official map</small></span><small></small></div>`).join('') : '';
+      if (!items.length && !extra) return '';
       return `<div class="cp-group" style="--c:${g.color}"><h4>${g.name}</h4>${items.map(c => {
         const p = localOf(c);
-        return `<button class="cp-item" data-cp="${c.id}"><span>${CHECKPOINT_ICONS[c.type] ?? '📍'}</span><span>${esc(c.name)}</span><small>${Math.round(elevationAt(p.x, p.z))} m</small></button>`;
-      }).join('')}</div>`;
+        const ico = c.type === 'gate' ? `<span class="gate-badge">${c.gate}</span>` : `<span>${CHECKPOINT_ICONS[c.type] ?? '📍'}</span>`;
+        return `<button class="cp-item" data-cp="${c.id}">${ico}<span>${esc(c.type === 'gate' ? c.name.replace(/^G\d+ · /, '') : c.name)}</span><small>${Math.round(elevationAt(p.x, p.z))} m</small></button>`;
+      }).join('')}${extra}</div>`;
     }).join('') || '<p class="muted">No matches.</p>';
     $('#cp-list').querySelectorAll('[data-cp]').forEach(b => b.addEventListener('click', () => open(b.dataset.cp, true)));
   }
@@ -168,6 +185,9 @@ export function initCheckpoints(ctx) {
         <div><h2>${esc(cp.name)}</h2><div class="muted">${r?.name ?? (cp.resort === 'summit' ? 'Summit' : 'My checkpoint')} · ${cp.lat.toFixed(5)}, ${cp.lon.toFixed(5)}</div></div>
       </div>
       ${cp.blurb ? `<p class="cp-blurb">${esc(cp.blurb)}</p>` : ''}
+      ${cp.type === 'gate' ? `<div class="warn gate-warn">⚠️ <b>Backcountry — outside the ski area.</b> Only go through an <b>open</b> gate, with avalanche
+        beacon, shovel & probe, a partner, and ideally a guide. Never duck ropes. Gate position on this map is approximate (published gate elevation ≈${cp.ele} m).
+        <a href="${GATE_INFO_URL}" target="_blank" rel="noopener">Official Niseko Rules &amp; gate status</a></div>` : ''}
       <div class="cp-now"><span class="cp-wx">${icon}</span><div><b>${desc}</b><div class="muted">${new Date(t).toLocaleString(undefined, { timeZone: 'Asia/Tokyo', weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} JST · follows the timeline</div></div></div>
       ${wx?.error ? `<div class="warn">⚠️ Live weather unavailable (${esc(wx.error)}). Try again in a minute.</div>` : ''}
       <div class="cond-grid cp-grid">
@@ -292,6 +312,7 @@ export function initCheckpoints(ctx) {
     group, open, update, place, addShared, startPlacing,
     get placing() { return placing; },
     refresh() { if (active && !$('#panel-cp').hidden) open(active.id, false); },
-    setVisible(on) { group.children.forEach(o => (o.visible = on)); },
+    setVisible(on) { showCps = on; applyVisibility(); },
+    setGatesVisible(on) { showGates = on; applyVisibility(); },
   };
 }

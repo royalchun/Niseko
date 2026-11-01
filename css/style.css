@@ -211,3 +211,15 @@ body.placing #scene canvas { cursor: crosshair; }
 @media (max-width: 560px) {
   .top-actions .pill span { display: none; }
 }
+
+/* Run names, gates, backcountry zones */
+.run-label { --c: #e2e8f0; font-size: 11px; font-weight: 600; color: #fff; padding: 1px 6px; border-radius: 6px;
+  background: rgba(15,23,42,.72); border-left: 3px solid var(--c); }
+.run-label.off { border-left-color: #f59e0b; color: #fde68a; }
+.bc-label { font-size: 12px; font-style: italic; font-weight: 600; color: #fde68a; letter-spacing: .02em; }
+.gate-badge { display: inline-grid; place-items: center; min-width: 26px; height: 20px; padding: 0 4px; border-radius: 4px; font: 700 11px/1 Inter, sans-serif;
+  color: #111; background: repeating-linear-gradient(135deg, #facc15 0 6px, #111 6px 9px); text-shadow: 0 0 2px #facc15, 0 0 2px #facc15; }
+.cp-marker.gate { --c: #facc15; padding-left: 2px; }
+.cp-item.static { cursor: default; }
+.gate-warn { margin: 8px 0; }
+.legend i.dash { width: 14px; height: 0; border: 0; border-top: 3px dashed #f59e0b; }

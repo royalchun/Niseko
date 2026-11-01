@@ -137,24 +137,26 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
     uHeight: { value: terrain.heightTex }, uTerrain: { value: new THREE.Vector2(frame.width, frame.depth) }, uExag: { value: 1 },
   };
   const PRECIP_VS = `
-    attribute float rnd; uniform float uTime, uBox, uScale, uRain, uSize, uFlutter, uGroundHug, uNearCut;
-    uniform vec3 uCenter, uVel; uniform sampler2D uHeight; uniform vec2 uTerrain; uniform float uExag;
+    attribute float rnd; uniform float uClock, uBox, uScale, uRain, uSize, uFlutter, uGroundHug, uNearCut;
+    uniform vec3 uCenter, uOffset; uniform sampler2D uHeight; uniform vec2 uTerrain; uniform float uExag;
     varying float vR; varying float vFade; varying float vAngle; varying float vPx;
     float groundAt(vec2 xz){ vec2 uv = xz / uTerrain + 0.5; return texture2D(uHeight, uv).r * uExag; } // data row 0 = north = uv.y 0
     void main(){
-      vec3 vel = uVel * (0.7 + 0.6 * rnd);
-      vec3 p = position * uBox + vel * uTime;
-      p.x += sin(uTime * (0.8 + rnd) + rnd * 40.0) * uBox * uFlutter * (1.0 - uRain);
-      p.z += cos(uTime * (0.6 + rnd) + rnd * 20.0) * uBox * uFlutter * (1.0 - uRain);
-      p = mod(p - uCenter + uBox * 0.5, uBox) + uCenter - uBox * 0.5;
+      // Three speed classes (0.75 / 1 / 1.25) so the CPU can wrap uOffset at 4 boxes seamlessly.
+      float f = 0.75 + 0.25 * floor(rnd * 2.999);
+      vec3 p = position * uBox + uOffset * f;
+      // Gentle real-time sway (metres), not tied to the fall speed.
+      p.x += sin(uClock * (1.2 + rnd) + rnd * 40.0) * uFlutter * (1.0 - uRain);
+      p.z += cos(uClock * (0.9 + rnd) + rnd * 20.0) * uFlutter * (1.0 - uRain);
+      p = mod(p - uCenter + uBox * 0.5, uBox) + uCenter - uBox * 0.5;   // world-anchored wrap
       float g = groundAt(p.xz);
-      if (uGroundHug > 0.5) p.y = g + 0.5 + rnd * rnd * 22.0 * uExag + sin(uTime * 3.0 + rnd * 50.0) * 2.0;
+      if (uGroundHug > 0.5) p.y = g + 0.5 + rnd * rnd * 22.0 * uExag + sin(uClock * 3.0 + rnd * 50.0) * 2.0;
       vec4 mv = modelViewMatrix * vec4(p, 1.0);
       gl_Position = projectionMatrix * mv;
       float s = uSize * (0.55 + 0.9 * rnd) * mix(1.0, 1.6, uRain);
       vPx = s * uScale / -mv.z;
       gl_PointSize = clamp(vPx, 1.0, 96.0);
-      vR = rnd; vAngle = rnd * 6.2831 + uTime * (rnd - 0.5) * 1.5;
+      vR = rnd; vAngle = rnd * 6.2831 + uClock * (rnd - 0.5) * 1.5;
       vFade = (1.0 - smoothstep(uBox * 0.35, uBox * 0.5, length(p - uCenter))) * step(g, p.y)
         * smoothstep(uNearCut * 0.5, uNearCut, distance(p, cameraPosition)); // hand over to the near layer
     }`;
@@ -184,9 +186,9 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
     const mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
       uniforms: {
-        uTime: { value: 0 }, uBox: { value: 600 }, uCenter: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3(0, -1.2, 0) },
+        uClock: { value: 0 }, uBox: { value: 600 }, uCenter: { value: new THREE.Vector3() }, uOffset: { value: new THREE.Vector3() },
         uScale: { value: renderer.getPixelRatio() * innerHeight }, uRain: { value: 0 }, uSize: { value: 1 }, uOpacity: { value: 0.9 },
-        uFlutter: { value: 0.004 }, uGroundHug: { value: 0 }, uNearCut: { value: 0 }, uLight: { value: 1 }, uTint: { value: new THREE.Color(1, 1, 1) },
+        uFlutter: { value: 1 }, uGroundHug: { value: 0 }, uNearCut: { value: 0 }, uLight: { value: 1 }, uTint: { value: new THREE.Color(1, 1, 1) },
         uFlake: { value: flakeTex }, ...terrainU,
       },
       vertexShader: PRECIP_VS, fragmentShader: PRECIP_FS,
@@ -195,17 +197,16 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
     pts.frustumCulled = false;
     pts.renderOrder = renderOrder;
     scene.add(pts);
-    return { pts, geo, mat, count, u: mat.uniforms };
+    return { pts, geo, mat, count, u: mat.uniforms, vel: new THREE.Vector3(0, -1, 0), box: 600 };
   }
   const far = precipLayer(quality.maxFlakes, 3);
   const near = precipLayer(quality.nearFlakes, 4);
   const drift = precipLayer(Math.round(quality.maxFlakes / 4), 3);
-  near.u.uFlutter.value = 0.02;
+  near.u.uFlutter.value = 0.35;
   drift.u.uGroundHug.value = 1;
-  drift.u.uFlutter.value = 0.01;
   const layers = [far, near, drift];
 
-  let state = null, rate = 0, time = 0, driftLevel = 0, windStrength = 0, sunLight = 0;
+  let state = null, rate = 0, time = 0, driftLevel = 0, windStrength = 0, sunLight = 0, isRain = false;
   const windVec = new THREE.Vector2();
 
   function apply(s, date, exag) {
@@ -245,22 +246,26 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
 
     // Precipitation
     const snowRate = s.snowfall ?? 0, rainRate = s.rain ?? 0;
-    const isRain = rainRate > snowRate * 0.7 && rainRate > 0.05;
+    isRain = rainRate > snowRate * 0.7 && rainRate > 0.05;
     rate = isRain ? Math.min(1, rainRate / 4) : Math.min(1, snowRate / 2.5); // cm/h → 0..1
     const any = snowRate > 0.02 || rainRate > 0.05;
-    const fall = isRain ? 7 : 1.1;
-    const light = 0.35 + 0.65 * day;
+    const light = 0.8 + 0.2 * day; // flakes stay bright at night (resort lights, snow glow) — dark flakes read as dirt
+    // Real-world velocity (m/s): snow falls ~1.1 m/s and is carried by the wind, rain ~7 m/s.
+    const fall = isRain ? 7 : 1.1, carry = isRain ? 0.5 : 0.85;
+    const realVel = new THREE.Vector3(windVec.x * carry, -fall, windVec.y * carry);
+    const h = Math.hypot(realVel.x, realVel.z), hMax = fall * 2.5; // keep the slant readable in gales
+    if (h > hMax) { realVel.x *= hMax / h; realVel.z *= hMax / h; }
     for (const L of [far, near]) {
       L.geo.setDrawRange(0, any ? Math.round(L.count * (0.12 + 0.88 * rate)) : 0);
       L.u.uRain.value = isRain ? 1 : 0;
-      L.u.uVel.value.set(windVec.x * (isRain ? 0.5 : 0.9), -fall, windVec.y * (isRain ? 0.5 : 0.9));
+      L.vel.copy(realVel);
       L.u.uLight.value = light;
     }
     // Spindrift: strong gusts lift existing snow off the ground.
     const gust = s.top?.gust ?? s.gust ?? 0;
     const driftAmt = isRain ? 0 : THREE.MathUtils.clamp((gust - 35) / 40, 0, 1) * THREE.MathUtils.clamp((s.topDepth ?? 0) / 0.1, 0, 1);
     drift.geo.setDrawRange(0, Math.round(drift.count * driftAmt));
-    drift.u.uVel.value.set(windVec.x * 1.8, 0, windVec.y * 1.8);
+    drift.vel.set(windVec.x * 1.8, 0, windVec.y * 1.8);
     drift.u.uOpacity.value = 0.35 + 0.4 * driftAmt;
     drift.u.uLight.value = light;
     driftLevel = driftAmt;
@@ -271,28 +276,42 @@ export function buildEffects({ scene, renderer, terrain, quality }) {
   function update(dt, camera, controls) {
     time += dt;
     cloudMat.uniforms.uTime.value = time;
-    // Far box scales with zoom so it always reads as a snowstorm in view.
+    const clock = time % 628.3;
     const dist = camera.position.distanceTo(controls.target);
+    // Far layer: the box scales with zoom so it always reads as a snowstorm, and the
+    // motion is scaled with it so flakes cross the view in ~8 s at any zoom
+    // (keeping the real ratio of wind drift to fall speed, so slant is correct).
     const box = THREE.MathUtils.clamp(dist * 0.9, 250, 7000);
-    far.u.uBox.value = box;
     far.u.uSize.value = box / 240;
-    far.u.uTime.value = time * (box / 600); // keep apparent fall speed constant
+    far.u.uFlutter.value = box * 0.003;
     far.u.uCenter.value.copy(camera.position).lerp(controls.target, 0.45);
     far.u.uNearCut.value = Math.min(35, box * 0.1);
-    // Near flakes: real-world scale around the camera (≈ 0.1 m flakes, 1 m/s).
-    near.u.uBox.value = 70;
+    advance(far, box, (box / 8) / Math.abs(far.vel.y || 1), dt);
+    // Near flakes: true scale and speed around the camera (≈ 0.1 m flakes, 1.1 m/s).
     near.u.uSize.value = 0.12;
-    near.u.uTime.value = time;
     near.u.uCenter.value.copy(camera.position);
+    advance(near, 70, 1, dt);
+    // Spindrift hugging the ground near where you look.
     const dbox = THREE.MathUtils.clamp(dist * 1.1, 300, 4000);
-    drift.u.uBox.value = dbox;
     drift.u.uSize.value = dbox / 260;
-    drift.u.uTime.value = time * (dbox / 600);
+    drift.u.uFlutter.value = dbox * 0.002;
     drift.u.uCenter.value.copy(controls.target);
+    advance(drift, dbox, Math.max(1, dbox / 400), dt);
+    for (const L of layers) L.u.uClock.value = clock;
     scene.fog.color.lerp(fogTarget, Math.min(1, dt * 2));
     if (!scene.background) scene.background = new THREE.Color();
     scene.background.lerp(bgTarget, Math.min(1, dt * 2));
     sun.target.position.copy(controls.target);
+  }
+
+  // Move a layer: offset += vel·k·dt in metres, wrapped at 4 boxes (seamless for the
+  // 0.75/1/1.25 speed classes), rescaled when the box size changes with zoom.
+  function advance(L, box, k, dt) {
+    const o = L.u.uOffset.value;
+    if (L.box !== box) { o.multiplyScalar(box / L.box); L.box = box; L.u.uBox.value = box; }
+    o.addScaledVector(L.vel, k * dt);
+    const W = 4 * box;
+    o.set(((o.x % W) + W) % W, ((o.y % W) + W) % W, ((o.z % W) + W) % W);
   }
 
   function resize() {

@@ -87,4 +87,31 @@ export const CHECKPOINTS = [
   { id: 'annupuriGondTop', name: 'Annupuri Gondola top', resort: 'annupuri', type: 'lift', lat: 42.86447, lon: 140.66113, blurb: 'Top of the Annupuri Gondola.' },
   { id: 'summit', name: 'Niseko Annupuri summit', resort: 'summit', type: 'summit', lat: 42.8750, lon: 140.6588, blurb: '1,308 m peak. Reached by a short hike from the summit gates when they are open.' },
 ];
-export const CHECKPOINT_ICONS = { base: '🏠', food: '🍜', lift: '🚡', summit: '⛰️', terrain: '🌲', custom: '📌' };
+export const CHECKPOINT_ICONS = { base: '🏠', food: '🍜', lift: '🚡', summit: '⛰️', terrain: '🌲', custom: '📌', gate: '🚧' };
+
+// Niseko backcountry gates (Niseko Rules). Names, elevations and destinations from published
+// gate guides; map positions are APPROXIMATE (matched to the stated elevation on the 5 m DEM
+// next to the lift that serves each gate). null position = not confirmed, listed only.
+export const GATES = [
+  { id: 'G1', name: 'G1 · L-ji gate', ele: 1050, resort: 'annupuri', lat: 42.86932, lon: 140.65456, leads: 'Trees west of Annupuri resort.' },
+  { id: 'G2', name: 'G2 · Annupuri peak gate', ele: 1170, resort: 'annupuri', lat: 42.86922, lon: 140.66139, leads: 'Annupuri peak; traverse across to the Back Bowl.' },
+  { id: 'G3', name: 'G3 · Hirafu peak gate', ele: 1180, resort: 'hirafu', lat: 42.87179, lon: 140.66234, leads: 'Summit hike → Higashi-One (East Ridge), North Face and Back Bowl.' },
+  { id: 'G4', name: 'G4 · Fujiwara gate', ele: 1180, resort: 'hirafu', lat: 42.87158, lon: 140.66285, leads: 'Next to the top of King Lift #4 → Fujiwara-no-sawa and a traverse across Higashi-One.' },
+  { id: 'G5', name: 'G5 · Hanazono gate', ele: 1050, resort: 'hanazono', lat: 42.87309, lon: 140.66767, leads: 'Near Hanazono Quad #3 → traverse toward Higashi-One when G3/G4 are closed; wooded slopes.' },
+  { id: 'G6', name: 'G6 · Moiwa peak gate', ele: 800, resort: 'other', lat: 42.86320, lon: 140.63300, leads: 'Mikaeri-no-sawa, Annupuri west face and the Goshiki onsen area.' },
+  { id: 'G7', name: 'G7 · Ee-sawa gate', ele: 790, resort: 'other', lat: 42.86215, lon: 140.63175, leads: 'Ee-sawa. Riding down into the Yu-no-sawa off-limits area is strictly prohibited.' },
+  { id: 'G8', name: 'G8 · Hachi-ban gate', ele: 950, resort: 'annupuri', lat: 42.86392, lon: 140.66148, leads: 'Lower O-sawa area. Beware of cornice slopes on the opposite side.' },
+  { id: 'G9', name: 'G9 · Waterfall gate', ele: 730, resort: null, lat: null, lon: null, leads: 'A gully with a waterfall; stays closed until the waterfall is buried.' },
+  { id: 'G10', name: 'G10 · Anbetsu gate', ele: 760, resort: null, lat: null, lon: null, leads: 'Deep snow with a cliff at the bottom of the valley.' },
+  { id: 'G11', name: 'G11 · Niseko Village gate', ele: 930, resort: 'village', lat: 42.86472, lon: 140.66848, leads: 'Mizuno-no-sawa limited-access controlled area — opened only when avalanche risk is low.' },
+];
+
+// Well-known backcountry zones, labelled approximately (≈).
+export const BC_AREAS = [
+  { name: 'Higashi-One (East Ridge)', lat: 42.8778, lon: 140.6655 },
+  { name: 'North Face', lat: 42.8808, lon: 140.6578 },
+  { name: 'Back Bowl', lat: 42.8792, lon: 140.6500 },
+  { name: 'Mizuno-no-sawa', lat: 42.8612, lon: 140.6738 },
+  { name: 'O-sawa', lat: 42.8578, lon: 140.6622 },
+];
+export const GATE_INFO_URL = 'https://www.niseko.ne.jp/en/niseko-rules/';
