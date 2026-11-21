@@ -6,11 +6,15 @@ export const BBOX = { south: 42.832, north: 42.902, west: 140.615, east: 140.722
 export const SUMMIT = { lat: 42.8750, lon: 140.6588, ele: 1308, name: 'Mt. Niseko Annupuri' };
 
 // Quality presets — chosen in the Layers panel, stored in localStorage.
-// demZoom 15 = GSI 5 m elevation; hdZoom = extra-sharp photo patch around the view.
+// demZoom 15 = GSI 5 m elevation; detail17/18 = max sharp photo patches streamed around the view;
+// treeSpacing (m) / treeDist (m) = 3D forest density and draw distance.
 export const QUALITY = {
-  ultra:    { label: 'Ultra (4K / retina)', demZoom: 15, imgZoom: 16, segments: 1800, pixelRatio: 2,   shadows: true,  shadowMap: 8192, maxFlakes: 140000, nearFlakes: 9000, hdZoom: 18, hdTiles: 10 },
-  high:     { label: 'High',                demZoom: 15, imgZoom: 16, segments: 1100, pixelRatio: 2,   shadows: true,  shadowMap: 4096, maxFlakes: 80000,  nearFlakes: 6000, hdZoom: 18, hdTiles: 8 },
-  balanced: { label: 'Balanced (phones)',   demZoom: 14, imgZoom: 15, segments: 640,  pixelRatio: 1.5, shadows: false, shadowMap: 2048, maxFlakes: 25000,  nearFlakes: 2500, hdZoom: 17, hdTiles: 6 },
+  ultra:    { label: 'Ultra (4K / retina)', demZoom: 15, imgZoom: 16, segments: 1800, pixelRatio: 3,   shadows: true,  shadowMap: 8192, maxFlakes: 140000, nearFlakes: 9000,
+              detail17: 16, detail18: 9, treeSpacing: 16, treeDist: 6500, treeShadows: true },
+  high:     { label: 'High',                demZoom: 15, imgZoom: 16, segments: 1100, pixelRatio: 2,   shadows: true,  shadowMap: 4096, maxFlakes: 80000,  nearFlakes: 6000,
+              detail17: 9, detail18: 4, treeSpacing: 20, treeDist: 4500, treeShadows: true },
+  balanced: { label: 'Balanced (phones)',   demZoom: 14, imgZoom: 15, segments: 640,  pixelRatio: 1.5, shadows: false, shadowMap: 2048, maxFlakes: 25000,  nearFlakes: 2500,
+              detail17: 4, detail18: 0, treeSpacing: 30, treeDist: 2800, treeShadows: false },
 };
 
 // Free, key-less tile sources (CORS enabled).

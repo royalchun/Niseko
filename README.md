@@ -3,7 +3,9 @@
 A live 3D weather & snow simulator for **Niseko United** — Annupuri, Niseko Village, Grand Hirafu and Hanazono — built to share with friends planning a ski trip.
 
 - **Live weather in 3D** — falling snow / rain, wind drift, clouds, fog and real sun position, driven by the current forecast for each resort base and the summit.
-- **Detailed terrain** — Japan's official GSI **5 m elevation model** (vs 30 m SRTM) with a 5 m lighting map, GSI aerial photos, and an extra-sharp photo patch (≈0.6 m/pixel) that loads wherever you zoom in.
+- **Detailed terrain** — Japan's official GSI **5 m elevation model** with a 5 m lighting map and GSI aerial photos. Sharper photo patches (≈0.9 m and ≈0.45 m per pixel) **stream in around wherever you look**, Google-Earth style, each with a denser, bicubic-smoothed mesh so ridges and gullies look smooth up close.
+- **3D forest** — tens of thousands of low-poly Todomatsu firs and white birches, placed wherever the aerial photo shows forest (kept off ski runs and lift lines). Crowns catch snow after storms, birches are bare in winter, trees sway in the wind, and the forest floor turns white under them.
+- **Crisp output** — up to 3× screen resolution on Ultra, and a 🖥️ 4K (3840×2160) image export.
 - **Snow on the ground** — snow depth from the weather model, spread over the terrain by elevation; cliffs shed snow, lee slopes collect wind-blown snow, the surface has wind ripples (sastrugi), and fresh snow sparkles in the sun.
 - **Snowfall** — three layers: distant snow, detailed six-armed flakes around the camera, and spindrift blowing along the ground in strong wind. Flakes stop where they hit the terrain and always cross the view in ~8 s whatever the zoom, slanting with the wind.
 - **Prominent ski runs** — runs painted onto the terrain like a printed trail map (coloured band + white edge, visible through snow), outlined lines and run names when zoomed in.
@@ -59,6 +61,7 @@ css/style.css        styles (dark glass UI, mobile layout)
 js/config.js         area, resorts, quality presets, data URLs
 js/terrain.js        tile stitching, 3D mesh, snow-cover shader
 js/overlays.js       lifts, runs, labels
+js/trees.js          3D forest (instanced firs & birches)
 js/checkpoints.js    checkpoint pins, detail cards, eye-level view
 js/effects.js        sky, sun, fog, clouds, snow/rain particles
 js/weather.js        Open-Meteo fetching + caching

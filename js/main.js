@@ -9,6 +9,7 @@ import { fetchHourly, fetchMultiModel, fetchEnsemble, fetchClimatology, sceneSta
 import { analyse, renderChart } from './forecast.js';
 import { estimateQueues, seasonInfo } from './crowd.js';
 import { initCheckpoints } from './checkpoints.js';
+import { buildTrees } from './trees.js';
 
 const $ = s => document.querySelector(s);
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
@@ -41,7 +42,7 @@ Object.assign(controls, { enableDamping: true, dampingFactor: 0.08, screenSpaceP
 const app = window.__niseko = { // exposed for debugging in the browser console
   terrain: null, overlays: null, effects: null, weather: null, analysis: null,
   time: Date.now(), focus: null, demo: false, playing: false, exag: Number(store.get('nk-exag', 1.3)),
-  times: [], queueOn: false, standing: false, cps: null, hdLoading: false,
+  times: [], queueOn: false, standing: false, cps: null, detail: null,
 };
 
 function toast(msg, ms = 2200) {
@@ -162,6 +163,14 @@ function refreshWeather() {
   u.uWindTo.value.copy(app.effects.windTo).normalize();
   u.uWindStr.value = app.effects.windStrength;
   u.uSparkle.value = app.effects.sunLight * (0.35 + 0.65 * u.uFresh.value) * (s.topDepth > 0.02 ? 1 : 0);
+  // Trees: crowns hold fresh snow (and some of a cold, deep snowpack); birches are bare Nov–Apr.
+  const month = new Date(app.time + 9 * 36e5).getUTCMonth() + 1;
+  const deep = (s.baseDepth + s.topDepth) / 2;
+  app.trees?.setConditions({
+    snow: THREE.MathUtils.clamp((s.snow24 ?? 0) / 8 + (deep > 0.3 && (s.temp ?? 0) < 0 ? 0.35 : 0), 0, 1) * ((s.temp ?? 0) > 2 ? 0.3 : 1),
+    leaf: month >= 5 && month <= 10 && deep < 0.05 ? 1 : 0,
+    wind: app.effects.windStrength,
+  });
   updateConditions(s);
   app.cps?.refresh();
   updateResortBadges();
@@ -370,6 +379,7 @@ function wireUI() {
   bind('#l-labels', on => o.labelGroup.children.forEach(c => (c.visible = on))); // CSS2D ignores parent visibility
   bind('#l-stylized', on => app.terrain.setStylized(on));
   bind('#l-cps', on => app.cps.setVisible(on));
+  bind('#l-trees', on => app.trees.setVisible(on));
   $('#l-demo').onchange = e => { app.demo = e.target.checked; refreshWeather(); if (app.queueOn) renderQueues(); };
   const ex = $('#l-exag');
   ex.value = app.exag;
@@ -388,6 +398,7 @@ function wireUI() {
   qs.innerHTML = Object.entries(QUALITY).map(([k, q]) => `<option value="${k}" ${k === qualityKey ? 'selected' : ''}>${q.label}</option>`).join('');
   qs.onchange = () => { store.set('nk-quality', qs.value); location.reload(); };
   $('#btn-shot').onclick = screenshot;
+  $('#btn-shot4k').onclick = () => screenshot({ width: 3840, height: 2160 });
 
   $('#btn-play').onclick = () => togglePlay();
   $('#btn-now').onclick = () => { app.time = Date.now(); togglePlay(false); refreshWeather(); };
@@ -550,19 +561,38 @@ function restoreFromHash() {
   controls.target.copy(target); camera.position.copy(pos);
   return true;
 }
-function screenshot() {
-  const prev = renderer.getPixelRatio();
-  renderer.setPixelRatio(Math.min(3, prev * 2));
-  renderer.setSize(innerWidth, innerHeight);
+// Save the 3D view as a PNG: 2× the screen by default, or an exact size (e.g. 4K UHD).
+function screenshot({ width, height } = {}) {
+  const prevRatio = renderer.getPixelRatio(), prevAspect = camera.aspect;
+  if (width) {
+    renderer.setPixelRatio(1);
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    app.overlays.setResolution(width, height);
+  } else {
+    renderer.setPixelRatio(Math.min(3, prevRatio * 2));
+    renderer.setSize(innerWidth, innerHeight);
+  }
+  app.effects.resize();
   renderer.render(scene, camera);
+  const restore = () => {
+    renderer.setPixelRatio(prevRatio);
+    renderer.setSize(innerWidth, innerHeight);
+    camera.aspect = prevAspect;
+    camera.updateProjectionMatrix();
+    app.overlays.setResolution(innerWidth, innerHeight);
+    app.effects.resize();
+  };
   renderer.domElement.toBlob(b => {
+    restore();
+    if (!b) return toast('⚠️ Screenshot failed (graphics memory?) — try the normal size.');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(b);
-    a.download = `niseko-${new Date(app.time).toISOString().slice(0, 13)}.png`;
+    a.download = `niseko-${new Date(app.time).toISOString().slice(0, 13)}${width ? `-${width}x${height}` : ''}.png`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    renderer.setPixelRatio(prev);
-    renderer.setSize(innerWidth, innerHeight);
+    toast(width ? `📸 Saved ${width}×${height} image (labels are not included)` : '📸 Saved');
   });
 }
 
@@ -570,20 +600,17 @@ function applyExag() {
   app.terrain.setExaggeration(app.exag);
   app.overlays.group.scale.y = app.exag;
   app.effects?.setExaggeration(app.exag);
+  app.trees?.setExaggeration(app.exag);
 }
 
-// Extra-sharp aerial photo around the view when zoomed in.
-let hdCheck = 0;
+// Stream sharper photo patches (and denser meshes) around the view.
+let detailCheck = 0;
 function maybeLoadHD() {
   const now = performance.now();
-  if (app.hdLoading || anim.active || now - hdCheck < 700) return;
-  hdCheck = now;
-  const dist = camera.position.distanceTo(controls.target);
-  if (dist > 2800) return;
-  const P = app.terrain.patch, t = controls.target;
-  if (P && Math.hypot(P.x - t.x, P.z - t.z) < P.size * 0.28) return;
-  app.hdLoading = true;
-  app.terrain.loadHDPatch(t.x, t.z).finally(() => { app.hdLoading = false; });
+  if (now - detailCheck < 400) return;
+  detailCheck = now;
+  const t = controls.target;
+  app.detail = app.terrain.updateDetail(t.x, t.z, camera.position.distanceTo(t));
 }
 
 // ---------- Main loop ----------
@@ -619,6 +646,10 @@ function frame() {
     }
   }
   if (app.effects) app.effects.update(dt, camera, controls);
+  if (app.trees) {
+    app.trees.update(camera, controls.target, dt);
+    app.terrain.uniforms.uTreeNear.value = app.trees.group.visible ? quality.treeDist * 0.75 : 0;
+  }
   // Compass needle
   const az = Math.atan2(camera.position.x - controls.target.x, camera.position.z - controls.target.z);
   $('#needle').style.transform = `rotate(${-90 + (az * 180) / Math.PI}deg)`;
@@ -650,11 +681,14 @@ async function boot() {
   const weatherP = fetchHourly().catch(e => { console.warn('Weather failed', e); return null; });
   const osmP = fetch('data/niseko-osm.json').then(r => r.json());
   const osm = await osmP;
-  app.terrain = await buildTerrain({ quality, renderer, trails: osm.pistes, onProgress: (p, failed) => { bar.style.width = `${Math.round(p * 85)}%`; msg.textContent = `Downloading terrain & satellite tiles… ${Math.round(p * 100)}%${failed ? ` (${failed} failed)` : ''}`; } });
+  app.terrain = await buildTerrain({ quality, renderer, trails: osm.pistes, liftLines: osm.lifts, onProgress: (p, failed) => { bar.style.width = `${Math.round(p * 85)}%`; msg.textContent = `Downloading terrain & satellite tiles… ${Math.round(p * 100)}%${failed ? ` (${failed} failed)` : ''}`; } });
   scene.add(app.terrain.mesh);
   msg.textContent = 'Placing lifts & ski runs…';
   app.overlays = buildOverlays({ osm, terrain: app.terrain, onResortClick: id => goTo(id) });
   scene.add(app.overlays.group);
+  msg.textContent = 'Growing the forest…';
+  app.trees = buildTrees({ terrain: app.terrain, quality, exag: app.exag });
+  scene.add(app.trees.group);
   app.effects = buildEffects({ scene, renderer, terrain: app.terrain, quality });
   applyExag();
   msg.textContent = 'Fetching live weather…';
