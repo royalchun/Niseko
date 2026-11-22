@@ -117,12 +117,13 @@ function makeUniforms() {
     uWindStr: { value: 0 },     // 0..1
     uSparkle: { value: 0 },     // sunlit glitter strength
     uTrails: { value: 1 },      // painted ski-run bands on/off
+    uTreeNear: { value: 0 },    // radius (m) where 3D trees replace the photo's dark forest
   };
 }
 
 const SNOW_COMMON = `
 varying vec3 vSnowPos; varying vec3 vSnowNormal;
-uniform float uDepthBase, uDepthTop, uElevBase, uElevTop, uFresh, uWet, uStylized, uExag, uWindStr, uSparkle;
+uniform float uDepthBase, uDepthTop, uElevBase, uElevTop, uFresh, uWet, uStylized, uExag, uWindStr, uSparkle, uTreeNear;
 uniform vec2 uWindTo;
 uniform sampler2D uTrailMap; uniform float uTrails;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -162,7 +163,10 @@ vec3 snowCol = mix(vec3(0.80,0.85,0.92), vec3(0.97,0.98,1.0), uFresh);
 snowCol = mix(snowCol, vec3(0.62,0.64,0.66), uWet * 0.6);
 float lum = dot(diffuseColor.rgb, vec3(0.299,0.587,0.114));
 float darkForest = (1.0 - smoothstep(0.08, 0.25, lum)) * (1.0 - uStylized);
-float snowCover = cover * (1.0 - treeShow - darkForest * 0.25 * (1.0 - 0.6 * uFresh));
+// Where 3D trees stand (near the camera) the forest floor is snow; further out the
+// photo's dark forest keeps showing through, as the trees are not drawn there.
+float treeFade = uTreeNear > 0. ? smoothstep(uTreeNear * 0.55, uTreeNear, distance(cameraPosition, vSnowPos)) : 1.0;
+float snowCover = cover * (1.0 - (treeShow + darkForest * 0.25 * (1.0 - 0.6 * uFresh)) * mix(0.7, 1.0, treeFade));
 diffuseColor.rgb = mix(diffuseColor.rgb, snowCol * (0.92 + 0.08 * n), snowCover);
 // Ski runs painted on top of everything, like a printed trail map.
 vec4 trail = texture2D(uTrailMap, vNormalMapUv);
@@ -210,7 +214,7 @@ function makeSnowMaterial(uniforms, map, normalMap, trailTex, extra = {}) {
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${SNOW_NORMAL}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${SNOW_EMISSIVE}`);
   };
-  mat.customProgramCacheKey = () => 'niseko-snow-v3';
+  mat.customProgramCacheKey = () => 'niseko-snow-v4';
   return mat;
 }
 
@@ -274,7 +278,7 @@ function heightGeometry(width, depth, segX, segZ, cx, cz, elevationAt, lift = 0)
   return geo;
 }
 
-export async function buildTerrain({ quality, renderer, onProgress, trails = [] }) {
+export async function buildTerrain({ quality, renderer, onProgress, trails = [], liftLines = [] }) {
   const demRange = tileRange(quality.demZoom);
   const k = 2 ** (quality.imgZoom - quality.demZoom);
   const nDx = demRange.x1 - demRange.x0 + 1, nDy = demRange.y1 - demRange.y0 + 1;
@@ -319,6 +323,52 @@ export async function buildTerrain({ quality, renderer, onProgress, trails = [] 
     const fx = Math.min(1, Math.max(0, u - x0)), fy = Math.min(1, Math.max(0, v - y0));
     const i = y0 * W + x0;
     return heights[i] * (1 - fx) * (1 - fy) + heights[i + 1] * fx * (1 - fy) + heights[i + W] * (1 - fx) * fy + heights[i + W + 1] * fx * fy;
+  }
+
+  // Bicubic (Catmull-Rom) sample: smooth curvature for close-up detail meshes,
+  // instead of the faceted look of bilinear interpolation.
+  const cr = (p0, p1, p2, p3, t) => p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+  const hpx = (i, j) => heights[Math.min(H - 1, Math.max(0, j)) * W + Math.min(W - 1, Math.max(0, i))];
+  function elevationSmooth(x, z) {
+    const u = (x / frame.width + 0.5) * W - 0.5, v = (z / frame.depth + 0.5) * H - 0.5;
+    const i = Math.floor(u), j = Math.floor(v), fx = u - i, fy = v - j;
+    const row = jj => cr(hpx(i - 1, jj), hpx(i, jj), hpx(i + 1, jj), hpx(i + 2, jj), fx);
+    return cr(row(j - 1), row(j), row(j + 1), row(j + 2), fy);
+  }
+
+  // Photo-based land cover at ≈7 m/px, used to place 3D trees.
+  const cW = Math.round(nDx * k * 64), cH = Math.round(nDy * k * 64);
+  const cls = document.createElement('canvas');
+  cls.width = cW; cls.height = cH;
+  const cctx = cls.getContext('2d', { willReadFrequently: true });
+  for (const ch of chunkImgs) {
+    cctx.drawImage(ch.canvas, (ch.dx0 - demRange.x0) / nDx * cW, (ch.dy0 - demRange.y0) / nDy * cH, ch.ndx / nDx * cW, ch.ndy / nDy * cH);
+  }
+  const clsPx = cctx.getImageData(0, 0, cW, cH).data;
+  // Keep ski runs and lift lines clear of trees.
+  const mask = document.createElement('canvas');
+  mask.width = cW; mask.height = cH;
+  const mctx0 = mask.getContext('2d', { willReadFrequently: true });
+  const toMask = (la, lo) => [(lon2tx(lo, quality.demZoom) - demRange.x0) / nDx * cW, (lat2ty(la, quality.demZoom) - demRange.y0) / nDy * cH];
+  const mppC = frame.width / cW;
+  mctx0.strokeStyle = '#fff'; mctx0.lineCap = mctx0.lineJoin = 'round';
+  for (const [list, wM] of [[trails.filter(t => !t.offpiste), 40], [liftLines, 24]]) {
+    mctx0.lineWidth = wM / mppC;
+    for (const t of list) { mctx0.beginPath(); t.pts.forEach(([la, lo], i) => { const [x, y] = toMask(la, lo); i ? mctx0.lineTo(x, y) : mctx0.moveTo(x, y); }); mctx0.stroke(); }
+  }
+  const maskPx = mctx0.getImageData(0, 0, cW, cH).data;
+  /** Land cover at (x, z): forest 0..1 (dark, green-dominant photo pixel), conifer bias 0..1. */
+  function forestAt(x, z) {
+    const i = Math.floor((x / frame.width + 0.5) * cW), j = Math.floor((z / frame.depth + 0.5) * cH);
+    if (i < 0 || j < 0 || i >= cW || j >= cH) return null;
+    const o = (j * cW + i) * 4;
+    if (maskPx[o] > 40) return { forest: 0, conifer: 0 };
+    const r = clsPx[o], g = clsPx[o + 1], b = clsPx[o + 2];
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    const green = (g - Math.max(r, b * 0.95)) / 255;          // > 0 for vegetation
+    const forest = Math.max(0, Math.min(1, (green + 0.02) * 12)) * (1 - THREE.MathUtils.smoothstep(lum, 0.30, 0.45));
+    const conifer = THREE.MathUtils.clamp((0.30 - lum) * 6 + (b - r) / 255 * 3, 0, 1);  // darker, bluer = fir
+    return { forest, conifer };
   }
 
   const uniforms = makeUniforms();
@@ -377,48 +427,109 @@ export async function buildTerrain({ quality, renderer, onProgress, trails = [] 
   heightTex.minFilter = heightTex.magFilter = THREE.NearestFilter;
   heightTex.needsUpdate = true;
 
-  // ---------- HD patch: sharper aerial photo around where you're looking ----------
-  let patch = null, patchToken = 0;
-  async function loadHDPatch(x, z) {
-    const token = ++patchToken;
-    const ll = frame.toLatLon(x, z);
-    const pz = quality.hdZoom, n = quality.hdTiles;
-    const tx0 = Math.floor(lon2tx(ll.lon, pz) - n / 2), ty0 = Math.floor(lat2ty(ll.lat, pz) - n / 2);
+  // ---------- Detail streaming (Google-Earth style) ----------
+  // Two extra levels over the base chunks: L17 patches (4×4 z17 tiles ≈ 930 m, 0.9 m/px)
+  // in a ring around the view and L18 patches (4×4 z18 tiles ≈ 470 m, 0.45 m/px) close
+  // in. Each patch has its own denser, bicubic-smoothed mesh, so shape detail rises too.
+  const LEVELS = [
+    { z: 17, seg: 160, nres: 512, lift: 0.35, offset: -2, order: 1, max: quality.detail17, cache: quality.detail17 * 2 },
+    { z: 18, seg: 192, nres: 512, lift: 0.7, offset: -4, order: 2, max: quality.detail18, cache: quality.detail18 * 2 },
+  ].filter(L => L.max > 0);
+  const patches = new Map(); // key → { L, px, py, mesh, cx, cz, size, used }
+  const pending = new Set();
+  let inflight = 0, useClock = 0;
+
+  async function buildPatch(L, px, py) {
+    const n = 4, tx0 = px * n, ty0 = py * n;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = n * 256;
     const ctx = canvas.getContext('2d');
-    const jobs = [];
     let ok = 0;
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      jobs.push(loadTile(imgSources, pz, tx0 + i, ty0 + j).then(img => { if (img) { ctx.drawImage(img, i * 256, j * 256); ok++; } }));
-    }
-    await Promise.all(jobs);
-    if (token !== patchToken || ok < n * n * 0.8) return null;
-    const nw = frame.toLocal(ty2lat(ty0, pz), tx2lon(tx0, pz));
-    const se = frame.toLocal(ty2lat(ty0 + n, pz), tx2lon(tx0 + n, pz));
+    await Promise.all(Array.from({ length: n * n }, (_, q) => loadTile(imgSources, L.z, tx0 + (q % n), ty0 + Math.floor(q / n))
+      .then(img => { if (img) { ctx.drawImage(img, (q % n) * 256, Math.floor(q / n) * 256); ok++; } })));
+    if (ok < n * n * 0.75) return null;
+    const nw = frame.toLocal(ty2lat(ty0, L.z), tx2lon(tx0, L.z));
+    const se = frame.toLocal(ty2lat(ty0 + n, L.z), tx2lon(tx0 + n, L.z));
     const width = se.x - nw.x, depth = se.z - nw.z, cx = (nw.x + se.x) / 2, cz = (nw.z + se.z) / 2;
-    const geo = heightGeometry(width, depth, 256, 256, cx, cz, elevationAt, 0.15);
-    const res = 512;
-    const nTex = normalCanvas((i, j) => elevationAt(nw.x + ((i + 0.5) / res) * width, nw.z + ((j + 0.5) / res) * depth), res, res, width / res, depth / res);
+    const geo = heightGeometry(width, depth, L.seg, L.seg, cx, cz, elevationSmooth, L.lift);
+    const res = L.nres;
+    const nTex = normalCanvas((i, j) => elevationSmooth(nw.x + ((i + 0.5) / res) * width, nw.z + ((j + 0.5) / res) * depth), res, res, width / res, depth / res);
+    nTex.anisotropy = aniso;
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = aniso;
     const tr = 1024;
-    const trTex = trailCanvas(trails, tr, tr, (la, lo) => [(lon2tx(lo, pz) - tx0) / n * tr, (lat2ty(la, pz) - ty0) / n * tr], width / tr);
+    const trTex = trailCanvas(trails, tr, tr, (la, lo) => [(lon2tx(lo, L.z) - tx0) / n * tr, (lat2ty(la, L.z) - ty0) / n * tr], width / tr);
     trTex.anisotropy = aniso;
-    const mat = makeSnowMaterial(uniforms, uniforms.uStylized.value ? null : tex, nTex, trTex, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-    mat.userData.trail = trTex;
+    const mat = makeSnowMaterial(uniforms, uniforms.uStylized.value ? null : tex, nTex, trTex,
+      { polygonOffset: true, polygonOffsetFactor: L.offset, polygonOffsetUnits: L.offset });
     mat.userData.photo = tex;
+    mat.userData.trail = trTex;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(cx, 0, cz);
     mesh.receiveShadow = true;
-    mesh.renderOrder = 1;
-    if (patch) { group.remove(patch.mesh); disposeMesh(patch.mesh); materials.splice(materials.indexOf(patch.mesh.material), 1); }
-    patch = { mesh, x: cx, z: cz, size: width };
+    mesh.renderOrder = L.order;
     materials.push(mat);
     group.add(mesh);
-    return patch;
+    return { L, px, py, mesh, cx, cz, size: width, used: useClock };
   }
+
+  function dropPatch(key) {
+    const P = patches.get(key);
+    group.remove(P.mesh);
+    materials.splice(materials.indexOf(P.mesh.material), 1);
+    disposeMesh(P.mesh);
+    patches.delete(key);
+  }
+
+  /** Call a few times a second: loads / shows the detail patches around (x, z). */
+  function updateDetail(x, z, camDist) {
+    useClock++;
+    const ll = frame.toLatLon(x, z);
+    const wanted = new Set();
+    const queue = [];
+    for (const L of LEVELS) {
+      const reach = L.z === 17 ? (camDist < 6500 ? THREE.MathUtils.clamp(camDist * 0.8, 700, 2400) : 0)
+        : (camDist < 1900 ? THREE.MathUtils.clamp(camDist * 0.55, 300, 800) : 0);
+      if (!reach) continue;
+      const n = 4, scale = 2 ** L.z;
+      const pSize = (frame.metersPerTile * 2 ** quality.demZoom / scale) * n; // metres per patch
+      const fx = lon2tx(ll.lon, L.z) / n, fy = lat2ty(ll.lat, L.z) / n;
+      const rP = Math.ceil(reach / pSize) + 1;
+      const cand = [];
+      for (let dy = -rP; dy <= rP; dy++) for (let dx = -rP; dx <= rP; dx++) {
+        const px = Math.floor(fx) + dx, py = Math.floor(fy) + dy;
+        const d = Math.hypot(px + 0.5 - fx, py + 0.5 - fy) * pSize;
+        if (d <= reach + pSize * 0.5) cand.push({ px, py, d });
+      }
+      cand.sort((a, b) => a.d - b.d).slice(0, L.max).forEach(c => {
+        const key = `${L.z}/${c.px}/${c.py}`;
+        wanted.add(key);
+        if (!patches.has(key) && !pending.has(key)) queue.push({ L, ...c, key });
+      });
+    }
+    for (const [key, P] of patches) {
+      P.mesh.visible = wanted.has(key);
+      if (P.mesh.visible) P.used = useClock;
+    }
+    // Evict least-recently-used hidden patches beyond each level's cache size.
+    for (const L of LEVELS) {
+      const mine = [...patches.entries()].filter(([, P]) => P.L === L && !P.mesh.visible).sort((a, b) => a[1].used - b[1].used);
+      const total = [...patches.values()].filter(P => P.L === L).length;
+      for (let i = 0; i < total - L.cache && i < mine.length; i++) dropPatch(mine[i][0]);
+    }
+    // Load nearest-first, finer level first, two at a time.
+    queue.sort((a, b) => b.L.z - a.L.z || a.d - b.d);
+    while (inflight < 2 && queue.length) {
+      const q = queue.shift();
+      pending.add(q.key); inflight++;
+      buildPatch(q.L, q.px, q.py).then(P => {
+        if (P) patches.set(q.key, P);
+      }).finally(() => { pending.delete(q.key); inflight--; });
+    }
+    return { loaded: patches.size, loading: inflight, queued: queue.length };
+  }
+
   function disposeMesh(m) {
     m.geometry.dispose();
     m.material.userData.photo?.dispose();
@@ -428,8 +539,8 @@ export async function buildTerrain({ quality, renderer, onProgress, trails = [] 
   }
 
   return {
-    mesh: group, meshes: group.children, frame, uniforms, elevationAt, minH, maxH, failed, total, miniCanvas: mini, heightTex,
-    loadHDPatch, get patch() { return patch; },
+    mesh: group, meshes: group.children, frame, uniforms, elevationAt, elevationSmooth, forestAt, minH, maxH, failed, total, miniCanvas: mini, heightTex,
+    updateDetail, get detailCount() { return [...patches.values()].filter(P => P.mesh.visible).length; },
     setExaggeration(e) { group.scale.y = e; uniforms.uExag.value = e; },
     setTrails(on) { uniforms.uTrails.value = on ? 1 : 0; },
     setStylized(on) {

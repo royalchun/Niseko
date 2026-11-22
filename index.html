@@ -123,17 +123,18 @@
     <label class="row"><input type="checkbox" id="l-liftlabels"> Lift names</label>
     <label class="row"><input type="checkbox" id="l-labels" checked> Resort & peak labels</label>
     <label class="row"><input type="checkbox" id="l-cps" checked> Checkpoints 📍</label>
+    <label class="row"><input type="checkbox" id="l-trees" checked> 3D forest 🌲 <small class="legend">firs &amp; birches</small></label>
     <label class="row"><input type="checkbox" id="l-stylized"> Painted map (hide satellite photo)</label>
     <label class="row col">Vertical exaggeration <span id="exag-val">1.3×</span><input type="range" id="l-exag" min="1" max="2.5" step="0.1" value="1.3"></label>
     <label class="row col">Display quality
       <select id="l-quality"></select>
-      <small>High &amp; Ultra use Japan's 5 m elevation model and load an extra-sharp photo patch wherever you zoom in. Changing reloads the page.</small>
+      <small>High &amp; Ultra use Japan's 5 m elevation model and stream sharper photos (down to ≈0.45 m/pixel) and smoother terrain around wherever you look. Ultra also renders at up to 3× screen resolution with denser forest. Changing reloads the page.</small>
     </label>
     <hr>
     <label class="row"><input type="checkbox" id="l-demo"> 🎬 Demo: simulate a big powder storm</label>
     <small class="muted">Handy outside the season to see what a 40 cm dump looks like.</small>
     <hr>
-    <button id="btn-shot" class="pill">📸 Save high-res screenshot</button>
+    <div class="row"><button id="btn-shot" class="pill">📸 Save screenshot</button><button id="btn-shot4k" class="pill">🖥️ Save 4K image</button></div>
   </section>
 
   <!-- Forecast -->
