@@ -169,8 +169,10 @@ float treeFade = uTreeNear > 0. ? smoothstep(uTreeNear * 0.55, uTreeNear, distan
 float snowCover = cover * (1.0 - (treeShow + darkForest * 0.25 * (1.0 - 0.6 * uFresh)) * mix(0.7, 1.0, treeFade));
 diffuseColor.rgb = mix(diffuseColor.rgb, snowCol * (0.92 + 0.08 * n), snowCover);
 // Ski runs painted on top of everything, like a printed trail map.
+// Faded out close to the camera: underfoot you see snow, the colour appears further away.
 vec4 trail = texture2D(uTrailMap, vNormalMapUv);
-diffuseColor.rgb = mix(diffuseColor.rgb, trail.rgb, trail.a * uTrails);`;
+float trailFade = smoothstep(40., 250., distance(cameraPosition, vSnowPos));
+diffuseColor.rgb = mix(diffuseColor.rgb, trail.rgb, trail.a * uTrails * trailFade);`;
 
 const SNOW_NORMAL = `
 {
